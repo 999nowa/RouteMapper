@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
+import Geolocation from '@react-native-community/geolocation';
 import MapView, { Marker } from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -26,7 +27,7 @@ function App() {
       }
     }
 
-    navigator.geolocation.getCurrentPosition(
+    Geolocation.getCurrentPosition(
       position => {
         setLocation({
           latitude: position.coords.latitude,
