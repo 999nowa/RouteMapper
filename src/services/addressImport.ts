@@ -1,4 +1,4 @@
-import TextRecognition from '@infinitered/react-native-mlkit-text-recognition';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {searchAddress, type GeocodingResult} from './geocoding';
 
@@ -9,8 +9,8 @@ export function normalizeAddress(value: string) {
 export async function importAddressesFromImage(): Promise<GeocodingResult[]> {
   const picker = await launchImageLibrary({mediaType: 'photo', selectionLimit: 1});
   if (picker.didCancel || !picker.assets?.[0]?.uri) return [];
-  const text = await TextRecognition.recognize(picker.assets[0].uri);
-  const lines = text.blocks.flatMap(block => block.lines.map(line => line.text.trim())).filter(Boolean);
+  const result = await TextRecognition.recognize(picker.assets[0].uri);
+  const lines = result.blocks.flatMap(block => block.lines.map(line => line.text.trim())).filter(Boolean);
   const candidates = lines.filter(line => /\d/.test(line) && line.length >= 5);
   const seen = new Set<string>();
   const results: GeocodingResult[] = [];
@@ -21,9 +21,7 @@ export async function importAddressesFromImage(): Promise<GeocodingResult[]> {
     try {
       const matches = await searchAddress(candidate);
       if (matches.length) results.push(matches[0]);
-    } catch {
-      // Ignore individual OCR lines that cannot be geocoded.
-    }
+    } catch {}
   }
   const coordinateKeys = new Set<string>();
   return results.filter(result => {
