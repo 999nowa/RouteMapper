@@ -1,8 +1,8 @@
 import React from 'react';
 import {StatusBar} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
-import RouteMapperScreen from './src/RouteMapperScreen';
+import RouteMapperFeatureScreen from './src/RouteMapperFeatureScreen';
 
 export default function App() {
-  return <SafeAreaProvider><StatusBar barStyle="dark-content" /><RouteMapperScreen /></SafeAreaProvider>;
+  return <SafeAreaProvider><StatusBar barStyle="dark-content" /><RouteMapperFeatureScreen /></SafeAreaProvider>;
 }
