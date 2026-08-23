@@ -10,9 +10,10 @@
     "test": "jest"
   },
   "dependencies": {
+    "@react-native-community/geolocation": "3.4.0",
     "react": "19.2.3",
     "react-native": "0.87.0",
-    "react-native-maps": "^1.27.2",
+    "react-native-maps": "1.27.2",
     "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
