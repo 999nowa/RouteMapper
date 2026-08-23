@@ -7,6 +7,7 @@ import { searchAddress, type GeocodingResult } from './src/services/geocoding';
 import { loadGoogleMapsApiKey, saveGoogleMapsApiKey, clearGoogleMapsApiKey } from './src/services/apiKeyStorage';
 import { deleteRoute, loadRoutes, saveRoute } from './src/services/routeStorage';
 import { openRouteInOsmAnd } from './src/services/osmand';
+import { shareRouteAsGpx } from './src/services/shareGpx';
 import { useCurrentLocation } from './src/hooks/useCurrentLocation';
 import type { Coordinate } from './src/types/location';
 import type { Route, RoutePoint } from './src/types/route';
@@ -75,13 +76,19 @@ function AppContent() {
   const loadSavedRoute = (route: Route) => { setPoints(route.points); setRouteName(route.name); setShowRoutes(false); setTimeout(() => mapRef.current?.fitToCoordinates(route.points, { edgePadding: { top: 180, right: 50, bottom: 180, left: 50 }, animated: true }), 100); };
   const removeSavedRoute = async (route: Route) => { await deleteRoute(route.id); setRoutes(await loadRoutes()); };
 
+  const exportGpx = async () => {
+    if (!points.length) return setMessage('Lägg till minst ett stopp först.');
+    try { await shareRouteAsGpx(points, routeName.trim() || 'RouteMapper route'); setMessage('GPX-rutten är klar att delas eller öppnas i en kompatibel app.'); }
+    catch { setMessage('Kunde inte skapa GPX-filen.'); }
+  };
+
   const navigateWithOsmAnd = async () => {
     if (!points.length) return setMessage('Lägg till minst ett stopp först.');
     try {
       const opened = await openRouteInOsmAnd(points, userCoordinate ? { id: 'current', ...userCoordinate } : undefined);
       if (!opened) setMessage('Kunde inte öppna OsmAnd. Kontrollera att OsmAnd är installerat.');
-      else if (points.length > 2) setMessage('OsmAnd öppnades med start och slut. Mellanstopp kräver GPX-export i nästa steg.');
-    } catch { setMessage('Kunde inte öppna OsmAnd.'); }
+      else setMessage(points.length > 2 ? 'Hela rutten skickades till OsmAnd som GPX.' : 'OsmAnd öppnades med rutten.');
+    } catch { setMessage('Kunde inte öppna OsmAnd. Kontrollera att OsmAnd är installerat.'); }
   };
 
   const openSettings = async () => { const key = await loadGoogleMapsApiKey(); setApiKey(key); setApiKeyInput(key); setShowSettings(true); };
@@ -101,7 +108,7 @@ function AppContent() {
     {!location && !error ? <View style={styles.loading}><ActivityIndicator /><Text>Hämtar din position...</Text></View> : null}
     {message ? <Pressable style={[styles.message, { top: insets.top + 175 }]} onPress={() => setMessage('')}><Text>{message}</Text></Pressable> : null}
 
-    <View style={[styles.controls, { bottom: insets.bottom + 18 }]}><Pressable onPress={centerOnLocation} style={styles.control}><Text style={styles.controlText}>⌖ Min position</Text></Pressable>{points.length ? <Pressable onPress={fitRoute} style={styles.control}><Text style={styles.controlText}>Visa rutt</Text></Pressable> : null}{points.length ? <Pressable onPress={navigateWithOsmAnd} style={styles.osmandControl}><Text style={styles.osmandText}>Navigera i OsmAnd</Text></Pressable> : null}<Pressable onPress={() => setShowRoutes(true)} style={styles.control}><Text style={styles.controlText}>Sparade</Text></Pressable>{points.length ? <Pressable onPress={() => setShowSave(true)} style={styles.control}><Text style={styles.controlText}>Spara</Text></Pressable> : null}</View>
+    <View style={[styles.controls, { bottom: insets.bottom + 18 }]}><Pressable onPress={centerOnLocation} style={styles.control}><Text style={styles.controlText}>⌖ Min position</Text></Pressable>{points.length ? <Pressable onPress={fitRoute} style={styles.control}><Text style={styles.controlText}>Visa rutt</Text></Pressable> : null}{points.length ? <Pressable onPress={exportGpx} style={styles.control}><Text style={styles.controlText}>Exportera GPX</Text></Pressable> : null}{points.length ? <Pressable onPress={navigateWithOsmAnd} style={styles.osmandControl}><Text style={styles.osmandText}>Navigera i OsmAnd</Text></Pressable> : null}<Pressable onPress={() => setShowRoutes(true)} style={styles.control}><Text style={styles.controlText}>Sparade</Text></Pressable>{points.length ? <Pressable onPress={() => setShowSave(true)} style={styles.control}><Text style={styles.controlText}>Spara</Text></Pressable> : null}</View>
 
     <Modal visible={showAddress} transparent animationType="slide" onRequestClose={() => setShowAddress(false)}><View style={styles.backdrop}><View style={[styles.modal, { paddingBottom: insets.bottom + 16 }]}><View style={styles.modalHeader}><Text style={styles.modalTitle}>Lägg till adress</Text><Pressable onPress={() => setShowAddress(false)}><Text style={styles.action}>Stäng</Text></Pressable></View><View style={styles.searchRow}><TextInput value={addressQuery} onChangeText={setAddressQuery} onSubmitEditing={performSearch} placeholder="Adress, ort eller postnummer" style={styles.input} autoFocus /><Pressable onPress={performSearch} style={styles.searchButton}><Text style={styles.searchText}>{searching ? '...' : 'Sök'}</Text></Pressable></View>{searchError ? <Text style={styles.error}>{searchError}</Text> : null}{addressResults.map(result => <Pressable key={`${result.latitude}-${result.longitude}`} style={styles.result} onPress={() => selectAddress(result)}><Text style={styles.resultTitle}>{result.displayName}</Text><Text style={styles.resultHint}>Tryck för att lägga till</Text></Pressable>)}{!searching && addressQuery.trim() && !addressResults.length && !searchError ? <Text style={styles.empty}>Inga träffar.</Text> : null}</View></View></Modal>
 
