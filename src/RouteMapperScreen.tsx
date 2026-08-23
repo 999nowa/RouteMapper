@@ -2,6 +2,8 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Linking,
   Modal,
   Pressable,
@@ -362,7 +364,7 @@ export default function RouteMapperScreen() {
         {area ? <Marker coordinate={area} pinColor="#7a4cff" title="Sökområde" /> : null}
       </MapView>
 
-      <SafeAreaView style={theme.overlay}>
+      <SafeAreaView style={theme.overlay} pointerEvents="box-none">
         <View style={theme.topCard}>
           <View style={theme.headerRow}>
             <View style={theme.headerText}>
@@ -442,12 +444,14 @@ export default function RouteMapperScreen() {
       </Modal>
 
       <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.modal}>
+        <KeyboardAvoidingView style={theme.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={insets.top}><View style={theme.modal}>
           <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sök adress</Text><Pressable onPress={() => setSearchOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
           <View style={theme.searchRow}><TextInput style={theme.input} value={query} onChangeText={setQuery} onSubmitEditing={performSearch} placeholder="Gata, nummer och ort" autoFocus /><Pressable style={theme.primaryButton} onPress={performSearch}><Text style={theme.primaryText}>Sök</Text></Pressable></View>
-          {results.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => selectAddress(result)}><Text style={theme.resultTitle}>{result.displayName}</Text><Text style={theme.resultHint}>Tryck för att lägga till</Text></Pressable>)}
+          <ScrollView keyboardShouldPersistTaps="handled">
+            {results.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => selectAddress(result)}><Text style={theme.resultTitle}>{result.displayName}</Text><Text style={theme.resultHint}>Tryck för att lägga till</Text></Pressable>)}
+          </ScrollView>
           {!busy && query.trim() && !results.length ? <Text style={theme.empty}>Inga träffar.</Text> : null}
-        </View></View>
+        </View></KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={areaOpen} transparent animationType="slide" onRequestClose={() => setAreaOpen(false)}>
