@@ -1,628 +1,109 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  Linking,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import MapView, {Marker, Polyline, type MapPressEvent} from 'react-native-maps';
+import {ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View} from 'react-native';
+import MapView, {Marker, Polyline} from 'react-native-maps';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
-import {searchAddress, searchPlace, type GeocodingResult} from './services/geocoding';
 import {importAddressesFromImage, normalizeAddress} from './services/addressImport';
+import {searchAddress, searchPlace, type GeocodingResult} from './services/geocoding';
 import {openRouteInOsmAnd} from './services/osmand';
 import {shareRouteAsGpx} from './services/shareGpx';
 import {clearSearchArea, loadSearchArea, saveSearchArea, type SearchArea} from './services/searchArea';
 import {clearGoogleMapsApiKey, loadGoogleMapsApiKey, saveGoogleMapsApiKey} from './services/apiKeyStorage';
 import {deleteRoute, loadRoutes, saveRoute} from './services/routeStorage';
 import {DEFAULT_SETTINGS, loadAppSettings, saveAppSettings, type AppSettings} from './services/appSettings';
-import {useCurrentLocation} from './hooks/useCurrentLocation';
-import type {RoutePoint, Route} from './types/route';
-import type {Coordinate} from './types/location';
+import type {Route, RoutePoint} from './types/route';
 
+type Tab = 'stops' | 'map' | 'saved';
+type Sheet = 'add' | 'bulk' | 'area' | 'settings' | 'save' | 'edit' | null;
 const FALLBACK = {latitude: 59.3293, longitude: 18.0686, latitudeDelta: 8, longitudeDelta: 8};
 const RADII = [1, 5, 10, 25, 50, 100];
-
-function dedupeKey(value: string) {
-  return normalizeAddress(value.split(',')[0] ?? value);
-}
+const keyOf = (value: string) => normalizeAddress(value.split(',')[0] ?? value);
+const toPoint = (result: GeocodingResult, index: number): RoutePoint => ({id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`, latitude: result.latitude, longitude: result.longitude, label: result.displayName.split(',').slice(0, 2).join(', ')});
 
 export default function RouteMapperScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
-  const {location, error: locationError} = useCurrentLocation();
-
+  const [tab, setTab] = useState<Tab>('stops');
+  const [sheet, setSheet] = useState<Sheet>(null);
   const [points, setPoints] = useState<RoutePoint[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [area, setArea] = useState<SearchArea | null>(null);
-  const [areaOpen, setAreaOpen] = useState(false);
-  const [areaQuery, setAreaQuery] = useState('');
-  const [areaResults, setAreaResults] = useState<GeocodingResult[]>([]);
   const [areaRadius, setAreaRadius] = useState(DEFAULT_SETTINGS.searchRadiusKm);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<GeocodingResult[]>([]);
-  const [saveOpen, setSaveOpen] = useState(false);
-  const [savedOpen, setSavedOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [hasApiKey, setHasApiKey] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [areaQuery, setAreaQuery] = useState('');
+  const [areaResults, setAreaResults] = useState<GeocodingResult[]>([]);
   const [routeName, setRouteName] = useState('Min rutt');
+  const [editing, setEditing] = useState<RoutePoint | null>(null);
+  const [editLabel, setEditLabel] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [editingPoint, setEditingPoint] = useState<RoutePoint | null>(null);
-  const [editLabel, setEditLabel] = useState('');
-  const [stopsOpen, setStopsOpen] = useState(false);
+  const t = useMemo(() => theme(settings.darkMode), [settings.darkMode]);
 
-  const currentCoordinate = useMemo<Coordinate | undefined>(
-    () => location ? {latitude: location.latitude, longitude: location.longitude} : undefined,
-    [location],
-  );
+  useEffect(() => { Promise.all([loadRoutes(), loadAppSettings(), loadSearchArea()]).then(([r, s, a]) => {setRoutes(r); setSettings(s); setArea(a); setAreaRadius(a?.radiusKm ?? s.searchRadiusKm);}).catch(() => setMessage('Kunde inte läsa lokal data.')); }, []);
+  useEffect(() => { saveAppSettings(settings).catch(() => undefined); }, [settings]);
+  useEffect(() => { if (!message) return; const timer = setTimeout(() => setMessage(''), 3300); return () => clearTimeout(timer); }, [message]);
+  useEffect(() => { if (sheet !== 'add' || query.trim().length < 3) {setResults([]); return;} const timer = setTimeout(() => searchAddress(query).then(setResults).catch(() => setResults([])), 350); return () => clearTimeout(timer); }, [query, sheet]);
 
-  useEffect(() => {
-    Promise.all([loadRoutes(), loadAppSettings(), loadSearchArea(), loadGoogleMapsApiKey()])
-      .then(([savedRoutes, savedSettings, savedArea, apiKey]) => {
-        setRoutes(savedRoutes);
-        setSettings(savedSettings);
-        setArea(savedArea);
-        setAreaRadius(savedArea?.radiusKm ?? savedSettings.searchRadiusKm);
-        setHasApiKey(Boolean(apiKey));
-      })
-      .catch(() => setMessage('Kunde inte läsa lokala inställningar.'));
-  }, []);
-
-  useEffect(() => {
-    saveAppSettings(settings).catch(() => undefined);
-  }, [settings]);
-
-  useEffect(() => {
-    if (!message) return;
-    const timeout = setTimeout(() => setMessage(''), 3200);
-    return () => clearTimeout(timeout);
-  }, [message]);
-
-  const theme = settings.darkMode ? darkStyles : styles;
-
-  const openStreetView = async (point: RoutePoint) => {
-    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${point.latitude},${point.longitude}&language=sv`;
-    try {
-      await Linking.openURL(url);
-    } catch {
-      setMessage('Kunde inte öppna Google Maps för Street View.');
-    }
-  };
-
-  const addPoint = (coordinate: Coordinate, label?: string) => {
+  const add = (incoming: GeocodingResult[]) => {
+    let count = 0;
     setPoints(current => {
-      const incomingName = dedupeKey(label ?? '');
-      const incomingCoordinate = `${coordinate.latitude.toFixed(5)},${coordinate.longitude.toFixed(5)}`;
-      if (current.some(point => dedupeKey(point.label ?? '') === incomingName || `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}` === incomingCoordinate)) {
-        return current;
-      }
-      return [...current, {
-        id: `${Date.now()}-${current.length}`,
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        label: label?.trim() || `Stopp ${current.length + 1}`,
-      }];
+      const labels = new Set(current.map(point => keyOf(point.label ?? '')));
+      const coordinates = new Set(current.map(point => `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`));
+      const next = [...current];
+      incoming.forEach((result, index) => { const label = result.displayName.split(',').slice(0, 2).join(', '); const coordinate = `${result.latitude.toFixed(5)},${result.longitude.toFixed(5)}`; if (!labels.has(keyOf(label)) && !coordinates.has(coordinate)) {next.push(toPoint(result, index)); labels.add(keyOf(label)); coordinates.add(coordinate); count += 1;}});
+      return next;
     });
+    return count;
   };
-
-  const handleMapPress = (event: MapPressEvent) => addPoint(event.nativeEvent.coordinate);
-
-  const fitRoute = () => {
-    if (points.length) {
-      mapRef.current?.fitToCoordinates(points, {
-        edgePadding: {top: 180, right: 50, bottom: 220, left: 50},
-        animated: true,
-      });
-    } else if (currentCoordinate) {
-      mapRef.current?.animateToRegion({...currentCoordinate, latitudeDelta: 0.04, longitudeDelta: 0.04}, 500);
-    }
+  const importImage = async () => {setBusy(true); try {const count = add(await importAddressesFromImage()); setMessage(count ? `${count} stopp lades till från bilden.` : 'Inga nya adresser hittades i bilden.');} catch {setMessage('Kunde inte läsa bilden.');} finally {setBusy(false);}};
+  const importBulk = async () => {
+    const candidates = [...new Set(bulkText.split(/\r?\n|;/).map(x => x.trim()).filter(x => x.length > 2))];
+    if (!candidates.length) return setMessage('Skriv en adress per rad.');
+    setBusy(true); const found: GeocodingResult[] = []; let missed = 0;
+    for (const candidate of candidates) {try {const match = await searchAddress(candidate); if (match[0]) found.push(match[0]); else missed += 1;} catch {missed += 1;}}
+    const count = add(found); setBusy(false); setBulkText(''); setSheet(null); setMessage(`${count} stopp lades till${missed ? ` · ${missed} behöver kontrolleras` : ''}.`);
   };
+  const move = (index: number, direction: -1 | 1) => setPoints(current => {const target = index + direction; if (target < 0 || target >= current.length) return current; const next = [...current]; [next[index], next[target]] = [next[target], next[index]]; return next;});
+  const saveRouteNow = async () => {if (!points.length) return setMessage('Lägg till minst ett stopp först.'); const now = Date.now(); await saveRoute({id: String(now), name: routeName.trim() || 'Min rutt', points, createdAt: now, updatedAt: now}); setRoutes(await loadRoutes()); setSheet(null); setMessage('Rutten sparades.');};
+  const chooseArea = async (result: GeocodingResult) => {const next = {name: result.displayName, latitude: result.latitude, longitude: result.longitude, radiusKm: areaRadius}; await saveSearchArea(next); setArea(next); setSheet(null); setAreaQuery(''); setAreaResults([]); setMessage('Sökområdet sparades.');};
+  const edit = (point: RoutePoint) => {setEditing(point); setEditLabel(point.label ?? ''); setSheet('edit');};
+  const openSettings = async () => {setApiKey(await loadGoogleMapsApiKey()); setSheet('settings');};
+  const fitRoute = () => {if (points.length) mapRef.current?.fitToCoordinates(points, {edgePadding: {top: 100, bottom: 160, left: 40, right: 40}, animated: true});};
 
-  const centerOnLocation = () => {
-    if (!currentCoordinate) {
-      setMessage(locationError?.message ?? 'Aktuell position kunde inte hämtas.');
-      return;
-    }
-    mapRef.current?.animateToRegion({...currentCoordinate, latitudeDelta: 0.04, longitudeDelta: 0.04}, 500);
-  };
+  const renderStop = ({item, index}: {item: RoutePoint; index: number}) => <View style={t.stop}>
+    <View style={t.number}><Text style={t.numberText}>{String(index + 1).padStart(2, '0')}</Text></View>
+    <Pressable style={t.copy} onPress={() => edit(item)}><Text style={t.stopTitle} numberOfLines={2}>{item.label}</Text><Text style={t.hint}>Tryck för att redigera</Text></Pressable>
+    <View><Pressable disabled={!index} onPress={() => move(index, -1)}><Text style={[t.arrow, !index && t.disabled]}>↑</Text></Pressable><Pressable disabled={index === points.length - 1} onPress={() => move(index, 1)}><Text style={[t.arrow, index === points.length - 1 && t.disabled]}>↓</Text></Pressable></View>
+    <Pressable hitSlop={10} onPress={() => setPoints(current => current.filter(point => point.id !== item.id))}><Text style={t.delete}>×</Text></Pressable>
+  </View>;
 
-  useEffect(() => {
-    const trimmed = query.trim();
-    if (trimmed.length < 3) {
-      setResults([]);
-      setBusy(false);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      setBusy(true);
-      try {
-        const nextResults = await searchAddress(trimmed);
-        if (!cancelled) setResults(nextResults);
-      } catch {
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setBusy(false);
-      }
-    }, 350);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query]);
-
-  const performSearch = async () => {
-    if (!query.trim()) return;
-    setBusy(true);
-    setMessage('');
-    try {
-      const nextResults = await searchAddress(query);
-      setResults(nextResults);
-      if (!nextResults.length) setMessage('Inga adresser hittades.');
-    } catch (e) {
-      setResults([]);
-      setMessage(e instanceof Error ? e.message : 'Adressökningen misslyckades.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const selectAddress = (result: GeocodingResult) => {
-    addPoint(result, result.displayName.split(',').slice(0, 2).join(', '));
-    setResults([]);
-    setQuery('');
-    setSearchOpen(false);
-    mapRef.current?.animateToRegion({...result, latitudeDelta: 0.02, longitudeDelta: 0.02}, 500);
-  };
-
-  const importImage = async () => {
-    setBusy(true);
-    setMessage('');
-    try {
-      const found = await importAddressesFromImage();
-      let added = 0;
-      setPoints(current => {
-        const names = new Set(current.map(point => dedupeKey(point.label ?? '')));
-        const coordinates = new Set(current.map(point => `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`));
-        const next = [...current];
-        for (const result of found) {
-          const label = result.displayName.split(',').slice(0, 2).join(', ');
-          const name = dedupeKey(label);
-          const coordinate = `${result.latitude.toFixed(5)},${result.longitude.toFixed(5)}`;
-          if (names.has(name) || coordinates.has(coordinate)) continue;
-          next.push({id: `${Date.now()}-${next.length}`, latitude: result.latitude, longitude: result.longitude, label});
-          names.add(name);
-          coordinates.add(coordinate);
-          added += 1;
-        }
-        return next;
-      });
-      setMessage(added ? `${added} nya adresser importerades.` : 'Inga nya adresser kunde läggas till.');
-    } catch {
-      setMessage('Kunde inte läsa bilden.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const searchAreaPlace = async () => {
-    if (!areaQuery.trim()) return;
-    setBusy(true);
-    try {
-      const next = await searchPlace(areaQuery);
-      setAreaResults(next);
-      if (!next.length) setMessage('Inga platser hittades.');
-    } catch (e) {
-      setAreaResults([]);
-      setMessage(e instanceof Error ? e.message : 'Områdessökningen misslyckades.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const chooseArea = async (result: GeocodingResult) => {
-    const next = {
-      name: result.displayName,
-      latitude: result.latitude,
-      longitude: result.longitude,
-      radiusKm: areaRadius,
-    };
-    await saveSearchArea(next);
-    setArea(next);
-    setAreaOpen(false);
-    setAreaQuery('');
-    setAreaResults([]);
-    mapRef.current?.animateToRegion({latitude: result.latitude, longitude: result.longitude, latitudeDelta: 0.25, longitudeDelta: 0.25}, 500);
-    setMessage('Sökområdet sparades.');
-  };
-
-  const resetArea = async () => {
-    await clearSearchArea();
-    setArea(null);
-    setAreaOpen(false);
-    setAreaResults([]);
-    setMessage('Sökområdet rensades.');
-  };
-
-  const removePoint = (id: string) => {
-    setPoints(current => current.filter(point => point.id !== id));
-  };
-
-  const clearPoints = () => {
-    if (!points.length) return;
-    Alert.alert('Rensa stopp?', 'Alla aktuella stopp tas bort från den aktuella rutten.', [
-      {text: 'Avbryt', style: 'cancel'},
-      {text: 'Rensa', style: 'destructive', onPress: () => setPoints([])},
-    ]);
-  };
-
-  const openEditor = (point: RoutePoint) => {
-    setEditingPoint(point);
-    setEditLabel(point.label ?? '');
-  };
-
-  const saveEditedPoint = () => {
-    if (!editingPoint) return;
-    const nextLabel = editLabel.trim();
-    setPoints(current => current.map(point => point.id === editingPoint.id ? {...point, label: nextLabel || point.label} : point));
-    setEditingPoint(null);
-  };
-
-  const saveCurrentRoute = async () => {
-    if (!points.length) {
-      setMessage('Lägg till minst ett stopp först.');
-      return;
-    }
-    const now = Date.now();
-    const route: Route = {
-      id: `${now}`,
-      name: routeName.trim() || 'Min rutt',
-      points,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await saveRoute(route);
-    setRoutes(await loadRoutes());
-    setSaveOpen(false);
-    setMessage('Rutten sparades lokalt.');
-  };
-
-  const loadSavedRoute = (route: Route) => {
-    setPoints(route.points);
-    setRouteName(route.name);
-    setSavedOpen(false);
-    setTimeout(() => {
-      mapRef.current?.fitToCoordinates(route.points, {edgePadding: {top: 180, right: 50, bottom: 220, left: 50}, animated: true});
-    }, 100);
-  };
-
-  const removeSavedRoute = async (route: Route) => {
-    await deleteRoute(route.id);
-    setRoutes(await loadRoutes());
-  };
-
-  const exportGpx = async () => {
-    if (!points.length) {
-      setMessage('Lägg till minst ett stopp först.');
-      return;
-    }
-    try {
-      await shareRouteAsGpx(points, routeName.trim() || 'RouteMapper route');
-      setMessage('GPX-filen är klar att delas eller öppnas.');
-    } catch {
-      setMessage('Kunde inte skapa GPX-filen.');
-    }
-  };
-
-  const navigateWithOsmAnd = async () => {
-    if (!points.length) {
-      setMessage('Lägg till minst ett stopp först.');
-      return;
-    }
-    try {
-      const opened = await openRouteInOsmAnd(points, routeName.trim() || 'RouteMapper route');
-      setMessage(opened ? 'Rutten skickades till OsmAnd.' : 'Kunde inte öppna OsmAnd.');
-    } catch {
-      setMessage('Kunde inte öppna OsmAnd. Kontrollera att OsmAnd är installerat.');
-    }
-  };
-
-  const openSettings = async () => {
-    const key = await loadGoogleMapsApiKey();
-    setApiKeyInput(key);
-    setHasApiKey(Boolean(key));
-    setSettingsOpen(true);
-  };
-
-  const saveApiKey = async () => {
-    await saveGoogleMapsApiKey(apiKeyInput);
-    setHasApiKey(Boolean(apiKeyInput.trim()));
-    setSettingsOpen(false);
-    setMessage(apiKeyInput.trim() ? 'API-nyckeln sparades lokalt.' : 'API-nyckeln raderades.');
-  };
-
-  const removeApiKey = () => {
-    Alert.alert('Radera API-nyckel?', 'Den lokalt sparade nyckeln tas bort från enheten.', [
-      {text: 'Avbryt', style: 'cancel'},
-      {text: 'Radera', style: 'destructive', onPress: async () => {
-        await clearGoogleMapsApiKey();
-        setApiKeyInput('');
-        setHasApiKey(false);
-        setSettingsOpen(false);
-      }},
-    ]);
-  };
-
-  return (
-    <View style={theme.container}>
-      <MapView
-        ref={mapRef}
-        style={StyleSheet.absoluteFill}
-        mapType={settings.mapType}
-        initialRegion={FALLBACK}
-        showsUserLocation={Boolean(currentCoordinate)}
-        showsCompass
-        toolbarEnabled
-        onPress={handleMapPress}
-      >
-        {settings.showStops ? points.map((point, index) => (
-          <Marker
-            key={point.id}
-            coordinate={point}
-            title={`${index + 1}. ${point.label ?? `Stopp ${index + 1}`}`}
-            onPress={() => openStreetView(point)}
-          />
-        )) : null}
-        {points.length > 1 ? <Polyline coordinates={points} strokeWidth={4} strokeColor="#1769e0" /> : null}
-        {area ? <Marker coordinate={area} pinColor="#7a4cff" title="Sökområde" /> : null}
-      </MapView>
-
-      <SafeAreaView style={theme.overlay} pointerEvents="box-none">
-        <View style={theme.topCard}>
-          <View style={theme.headerRow}>
-            <View style={theme.headerText}>
-              <Text style={theme.title}>RouteMapper</Text>
-              <Text style={theme.subtitle}>{points.length} stopp{locationError ? ' · GPS ej tillgänglig' : ''}</Text>
-            </View>
-            <Pressable style={theme.headerButton} onPress={() => setAreaOpen(true)}><Text style={theme.headerButtonText}>{area ? 'Område' : 'Sökområde'}</Text></Pressable>
-            <Pressable style={theme.headerButton} onPress={openSettings}><Text style={theme.headerButtonText}>Inställningar</Text></Pressable>
-          </View>
-          {area ? <Text style={theme.areaText} numberOfLines={1}>{area.name} · {area.radiusKm} km</Text> : null}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>
-            <Pressable style={theme.button} onPress={() => setSearchOpen(true)}><Text>Sök adress</Text></Pressable>
-            <Pressable style={theme.button} onPress={importImage}><Text>Bild</Text></Pressable>
-            <Pressable style={theme.button} onPress={centerOnLocation}><Text>Min position</Text></Pressable>
-            <Pressable style={theme.button} onPress={fitRoute}><Text>Visa rutt</Text></Pressable>
-            <Pressable style={theme.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Karta' : 'Satellit'}</Text></Pressable>
-            <Pressable style={theme.button} onPress={() => points.length ? openStreetView(points[points.length - 1]) : setMessage('Lägg till ett stopp först.')}><Text>Street View</Text></Pressable>
-          </ScrollView>
-        </View>
-
-        {points.length ? (
-          <View style={theme.stopCard}>
-            <View style={theme.panelHeader}>
-              <Text style={theme.panelTitle}>Senaste stopp ({points.length})</Text>
-              <View style={theme.row}>
-                <Pressable onPress={() => setSettings(s => ({...s, showStops: !s.showStops}))}><Text style={theme.action}>{settings.showStops ? 'Dölj' : 'Visa'}</Text></Pressable>
-                <Pressable onPress={() => setStopsOpen(true)}><Text style={theme.action}>Alla</Text></Pressable><Pressable onPress={clearPoints}><Text style={theme.actionDanger}>Rensa</Text></Pressable>
-              </View>
-            </View>
-            {points.slice(-3).map((point, index, visible) => {
-              const actual = points.length - visible.length + index;
-              return (
-                <View key={point.id} style={theme.stopRow}>
-                  <View style={theme.number}><Text style={theme.numberText}>{actual + 1}</Text></View>
-                  <Pressable style={theme.stopDetails} onPress={() => openEditor(point)}>
-                    <Text style={theme.stopName} numberOfLines={1}>{point.label}</Text>
-                    <Text style={theme.coordinates}>{point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
-                  </Pressable>
-                  <Pressable onPress={() => openStreetView(point)} style={theme.smallAction}><Text>SV</Text></Pressable>
-                  <Pressable onPress={() => removePoint(point.id)} style={theme.smallAction}><Text style={theme.actionDanger}>×</Text></Pressable>
-                </View>
-              );
-            })}
-          </View>
-        ) : null}
-
-        {busy ? <View style={theme.loading}><ActivityIndicator /><Text>Arbetar...</Text></View> : null}
-        {message ? <View style={theme.message}><Text style={theme.messageText}>{message}</Text></View> : null}
-
-        <View style={[theme.bottomBar, {paddingBottom: insets.bottom + 8}]}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>
-            <Pressable style={theme.button} onPress={() => setSavedOpen(true)}><Text>Sparade</Text></Pressable>
-            {points.length ? <Pressable style={theme.button} onPress={() => setSaveOpen(true)}><Text>Spara</Text></Pressable> : null}
-            {points.length ? <Pressable style={theme.button} onPress={exportGpx}><Text>Exportera GPX</Text></Pressable> : null}
-            {points.length ? <Pressable style={theme.primaryButton} onPress={navigateWithOsmAnd}><Text style={theme.primaryText}>Navigera i OsmAnd</Text></Pressable> : null}
-          </ScrollView>
-        </View>
-      </SafeAreaView>
-
-      <Modal visible={stopsOpen} transparent animationType="slide" onRequestClose={() => setStopsOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.modal}>
-          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Alla stopp ({points.length})</Text><Pressable onPress={() => setStopsOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
-          <ScrollView>
-            {points.map((point, index) => (
-              <View key={point.id} style={theme.stopRow}>
-                <View style={theme.number}><Text style={theme.numberText}>{index + 1}</Text></View>
-                <Pressable style={theme.stopDetails} onPress={() => { mapRef.current?.animateToRegion({...point, latitudeDelta: 0.02, longitudeDelta: 0.02}, 350); setStopsOpen(false); }}>
-                  <Text style={theme.stopName} numberOfLines={2}>{point.label}</Text>
-                  <Text style={theme.coordinates}>{point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
-                </Pressable>
-                <Pressable onPress={() => openEditor(point)} style={theme.smallAction}><Text style={theme.action}>Ändra</Text></Pressable>
-                <Pressable onPress={() => removePoint(point.id)} style={theme.smallAction}><Text style={theme.actionDanger}>Ta bort</Text></Pressable>
-              </View>
-            ))}
-          </ScrollView>
-        </View></View>
-      </Modal>
-
-      <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
-        <KeyboardAvoidingView style={theme.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={insets.top}><View style={theme.modal}>
-          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sök adress</Text><Pressable onPress={() => setSearchOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
-          <View style={theme.searchRow}><TextInput style={theme.input} value={query} onChangeText={setQuery} onSubmitEditing={performSearch} placeholder="Gata, nummer och ort" autoFocus /><Pressable style={theme.primaryButton} onPress={performSearch}><Text style={theme.primaryText}>Sök</Text></Pressable></View>
-          <ScrollView keyboardShouldPersistTaps="handled">
-            {results.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => selectAddress(result)}><Text style={theme.resultTitle}>{result.displayName}</Text><Text style={theme.resultHint}>Tryck för att lägga till</Text></Pressable>)}
-          </ScrollView>
-          {!busy && query.trim() && !results.length ? <Text style={theme.empty}>Inga träffar.</Text> : null}
-        </View></KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={areaOpen} transparent animationType="slide" onRequestClose={() => setAreaOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.modal}>
-          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sökområde</Text><Pressable onPress={() => setAreaOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
-          <Text style={theme.description}>Adressökningen prioriterar träffar inom det valda området.</Text>
-          <View style={theme.searchRow}><TextInput style={theme.input} value={areaQuery} onChangeText={setAreaQuery} onSubmitEditing={searchAreaPlace} placeholder="Sök plats" /><Pressable style={theme.primaryButton} onPress={searchAreaPlace}><Text style={theme.primaryText}>Sök</Text></Pressable></View>
-          {areaResults.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => chooseArea(result)}><Text style={theme.resultTitle}>{result.displayName}</Text></Pressable>)}
-          <Text style={theme.label}>Radie</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>{RADII.map(radius => <Pressable key={radius} style={[theme.radius, areaRadius === radius ? theme.radiusSelected : null]} onPress={() => {setAreaRadius(radius); setSettings(s => ({...s, searchRadiusKm: radius}));}}><Text>{radius} km</Text></Pressable>)}</ScrollView>
-          <View style={theme.row}>{area ? <Pressable style={theme.deleteButton} onPress={resetArea}><Text style={theme.primaryText}>Rensa område</Text></Pressable> : null}</View>
-        </View></View>
-      </Modal>
-
-      <Modal visible={saveOpen} transparent animationType="fade" onRequestClose={() => setSaveOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.smallModal}><Text style={theme.modalTitle}>Spara rutt</Text><TextInput style={theme.inputFull} value={routeName} onChangeText={setRouteName} placeholder="Ruttnamn"/><View style={theme.actions}><Pressable style={theme.button} onPress={() => setSaveOpen(false)}><Text>Avbryt</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveCurrentRoute}><Text style={theme.primaryText}>Spara</Text></Pressable></View></View></View>
-      </Modal>
-
-      <Modal visible={savedOpen} transparent animationType="slide" onRequestClose={() => setSavedOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.modal}>
-          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sparade rutter</Text><Pressable onPress={() => setSavedOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
-          {routes.map(route => <View key={route.id} style={theme.savedRow}><Pressable style={theme.stopDetails} onPress={() => loadSavedRoute(route)}><Text style={theme.resultTitle}>{route.name}</Text><Text style={theme.resultHint}>{route.points.length} stopp</Text></Pressable><Pressable onPress={() => removeSavedRoute(route)}><Text style={theme.actionDanger}>Ta bort</Text></Pressable></View>)}
-          {!routes.length ? <Text style={theme.empty}>Inga sparade rutter.</Text> : null}
-        </View></View>
-      </Modal>
-
-      <Modal visible={settingsOpen} transparent animationType="slide" onRequestClose={() => setSettingsOpen(false)}>
-        <View style={theme.backdrop}><View style={theme.modal}>
-          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Inställningar</Text><Pressable onPress={() => setSettingsOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
-          <Text style={theme.sectionTitle}>Utseende</Text>
-          <View style={theme.settingRow}><View style={theme.stopDetails}><Text style={theme.settingText}>Mörkt läge</Text><Text style={theme.resultHint}>Använd mörkare paneler och dialoger</Text></View><Switch value={settings.darkMode} onValueChange={value => setSettings(s => ({...s, darkMode: value}))}/></View>
-          <Text style={theme.sectionTitle}>Karta</Text>
-          <View style={theme.settingRow}><View style={theme.stopDetails}><Text>Automatisk inpassning</Text><Text style={theme.resultHint}>Visa hela rutten efter sökning och import</Text></View><Switch value={settings.autoFitRoute} onValueChange={value => setSettings(s => ({...s, autoFitRoute: value}))}/></View>
-          <View style={theme.settingRow}><View style={theme.stopDetails}><Text>Visa stoppmarkörer</Text></View><Switch value={settings.showStops} onValueChange={value => setSettings(s => ({...s, showStops: value}))}/></View>
-          <View style={theme.settingRow}><Text>Standardvy</Text><Pressable style={theme.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Satellit' : 'Karta'}</Text></Pressable></View>
-          <Text style={theme.sectionTitle}>Google API-nyckel</Text>
-          <Text style={theme.description}>Nyckeln för adressökning sparas endast lokalt på enheten.</Text>
-          <TextInput style={theme.inputFull} value={apiKeyInput} onChangeText={setApiKeyInput} placeholder="API-nyckel" autoCapitalize="none" autoCorrect={false} secureTextEntry />
-          <Text style={theme.status}>{hasApiKey ? 'API-nyckel konfigurerad' : 'Ingen lokal API-nyckel konfigurerad'}</Text>
-          <View style={theme.actions}><Pressable style={theme.button} onPress={removeApiKey}><Text>Radera nyckel</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveApiKey}><Text style={theme.primaryText}>Spara</Text></Pressable></View>
-        </View></View>
-      </Modal>
-
-      <Modal visible={Boolean(editingPoint)} transparent animationType="fade" onRequestClose={() => setEditingPoint(null)}>
-        <View style={theme.backdrop}><View style={theme.smallModal}><Text style={theme.modalTitle}>Redigera stopp</Text><TextInput style={theme.inputFull} value={editLabel} onChangeText={setEditLabel} placeholder="Namn"/><View style={theme.actions}><Pressable style={theme.button} onPress={() => setEditingPoint(null)}><Text>Avbryt</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveEditedPoint}><Text style={theme.primaryText}>Spara</Text></Pressable></View></View></View>
-      </Modal>
-
-    </View>
-  );
+  return <View style={t.page}><SafeAreaView style={t.safe}>
+    <View style={t.header}><View><Text style={t.brand}>RouteMapper</Text><Text style={t.meta}>{points.length} stopp · bygg din rutt snabbt</Text></View><Pressable style={t.iconButton} onPress={openSettings}><Text style={t.icon}>⚙</Text></Pressable></View>
+    {tab === 'stops' && <View style={t.content}><View style={t.hero}><Text style={t.heroTitle}>{points.length ? 'Din stopp-lista' : 'Vart ska du?'}</Text><Text style={t.heroText}>{points.length ? 'Ordna stoppen och öppna dem i OsmAnd när du är klar.' : 'Lägg till en adress, flera rader eller läs dem från en bild.'}</Text></View>
+      <Pressable style={t.primary} onPress={() => setSheet('add')}><Text style={t.primaryText}>＋ Lägg till adress</Text></Pressable><Pressable style={t.secondary} onPress={() => setSheet('bulk')}><Text style={t.secondaryText}>☷ Flera adresser samtidigt</Text></Pressable><Pressable style={t.secondary} onPress={importImage}><Text style={t.secondaryText}>▣ Importera från bild</Text></Pressable>
+      {area ? <Pressable style={t.area} onPress={() => setSheet('area')}><Text style={t.areaText}>⌖ {area.name} · {area.radiusKm} km</Text><Text style={t.link}>Ändra</Text></Pressable> : <Pressable onPress={() => setSheet('area')}><Text style={t.areaPrompt}>⌖ Ange sökområde för säkrare träffar</Text></Pressable>}
+      {points.length ? <FlatList data={points} renderItem={renderStop} keyExtractor={item => item.id} contentContainerStyle={t.list}/> : <View style={t.empty}><Text style={t.emptyIcon}>⌖</Text><Text style={t.emptyTitle}>Inga stopp ännu</Text><Text style={t.emptyText}>Adresser dubblettkontrolleras automatiskt när du lägger till dem.</Text></View>}
+    </View>}
+    {tab === 'map' && <View style={t.map}><MapView ref={mapRef} style={StyleSheet.absoluteFill} mapType={settings.mapType} initialRegion={FALLBACK}>{points.map((point, index) => <Marker key={point.id} coordinate={point} title={`${index + 1}. ${point.label}`}/>)}{points.length > 1 && <Polyline coordinates={points} strokeColor={t.accent} strokeWidth={4}/>}</MapView><View style={t.mapCard}><Text style={t.mapTitle}>Kontrollkarta</Text><Text style={t.hint}>Kontrollera att stoppen hamnat rätt.</Text><Pressable style={t.mapButton} onPress={fitRoute}><Text style={t.primaryText}>Visa alla stopp</Text></Pressable></View></View>}
+    {tab === 'saved' && <View style={t.content}><Text style={t.heroTitle}>Sparade rutter</Text><Text style={t.heroText}>Återanvänd en stopp-lista när du behöver den igen.</Text><FlatList data={routes} keyExtractor={item => item.id} contentContainerStyle={t.list} ListEmptyComponent={<View style={t.empty}><Text style={t.emptyTitle}>Inga sparade rutter</Text></View>} renderItem={({item}) => <View style={t.stop}><Pressable style={t.copy} onPress={() => {setPoints(item.points); setRouteName(item.name); setTab('stops'); setMessage('Rutten laddades.');}}><Text style={t.stopTitle}>{item.name}</Text><Text style={t.hint}>{item.points.length} stopp</Text></Pressable><Pressable onPress={async () => {await deleteRoute(item.id); setRoutes(await loadRoutes());}}><Text style={t.delete}>×</Text></Pressable></View>}/></View>}
+    {busy && <View style={t.busy}><ActivityIndicator color={t.accent}/><Text style={t.busyText}>Bearbetar adresser…</Text></View>}{message && <View style={t.toast}><Text style={t.toastText}>{message}</Text></View>}
+    <View style={[t.bottom, {paddingBottom: Math.max(insets.bottom, 12)}]}><View style={t.tabs}>{(['stops', 'map', 'saved'] as Tab[]).map(value => <Pressable key={value} style={t.tab} onPress={() => setTab(value)}><Text style={[t.tabLabel, tab === value && t.selected]}>{value === 'stops' ? '☷  Stopp' : value === 'map' ? '⌖  Karta' : '▣  Sparat'}</Text></Pressable>)}</View>{tab === 'stops' && points.length > 0 && <View style={t.routeActions}><Pressable style={t.save} onPress={() => setSheet('save')}><Text style={t.saveText}>Spara</Text></Pressable><Pressable style={t.osmand} onPress={async () => {try {await openRouteInOsmAnd(points, routeName || 'RouteMapper-rutt'); setMessage('Öppnar stopp-listan i OsmAnd.');} catch {setMessage('Kunde inte öppna OsmAnd.');}}}><Text style={t.primaryText}>ÖPPNA I OSMAND</Text></Pressable></View>}</View>
+  </SafeAreaView>
+  <Sheet visible={sheet === 'add'} close={() => setSheet(null)} t={t} title="Lägg till adress"><TextInput style={t.input} autoFocus value={query} onChangeText={setQuery} placeholder="Gata, nummer och ort" placeholderTextColor={t.muted}/><ScrollView keyboardShouldPersistTaps="handled">{results.map(result => <Pressable key={`${result.latitude}-${result.longitude}`} style={t.result} onPress={() => {const count = add([result]); setMessage(count ? 'Stoppet lades till.' : 'Det stoppet finns redan.'); setQuery(''); setSheet(null);}}><Text style={t.stopTitle}>{result.displayName}</Text><Text style={t.hint}>Lägg till stopp</Text></Pressable>)}</ScrollView></Sheet>
+  <Sheet visible={sheet === 'bulk'} close={() => setSheet(null)} t={t} title="Lägg till flera"><Text style={t.sheetText}>En adress per rad. RouteMapper söker och dubblettkontrollerar automatiskt.</Text><TextInput style={[t.input, t.multiline]} multiline value={bulkText} onChangeText={setBulkText} placeholder={'Kungsgatan 12, Uppsala\nS:t Olofsgatan 8, Uppsala'} placeholderTextColor={t.muted} textAlignVertical="top"/><Pressable style={t.fullButton} onPress={importBulk}><Text style={t.primaryText}>LÄGG TILL ADRESSER</Text></Pressable></Sheet>
+  <Sheet visible={sheet === 'area'} close={() => setSheet(null)} t={t} title="Sökområde"><Text style={t.sheetText}>Prioritera rätt ort när adresserna är ofullständiga.</Text><View style={t.searchRow}><TextInput style={t.input} value={areaQuery} onChangeText={setAreaQuery} placeholder="Sök ort eller område" placeholderTextColor={t.muted}/><Pressable style={t.smallButton} onPress={() => searchPlace(areaQuery).then(setAreaResults).catch(() => setMessage('Kunde inte söka område.'))}><Text style={t.primaryText}>Sök</Text></Pressable></View>{areaResults.map(result => <Pressable key={`${result.latitude}-${result.longitude}`} style={t.result} onPress={() => chooseArea(result)}><Text style={t.stopTitle}>{result.displayName}</Text></Pressable>)}<Text style={t.section}>Radie</Text><ScrollView horizontal contentContainerStyle={t.radiusRow}>{RADII.map(radius => <Pressable key={radius} style={[t.radius, radius === areaRadius && t.radiusActive]} onPress={() => {setAreaRadius(radius); setSettings(current => ({...current, searchRadiusKm: radius}));}}><Text style={t.radiusText}>{radius} km</Text></Pressable>)}</ScrollView>{area && <Pressable onPress={async () => {await clearSearchArea(); setArea(null); setSheet(null);}}><Text style={t.danger}>Rensa sökområde</Text></Pressable>}</Sheet>
+  <Sheet visible={sheet === 'save'} close={() => setSheet(null)} t={t} title="Spara rutt"><TextInput style={t.input} value={routeName} onChangeText={setRouteName} placeholder="Ruttnamn" placeholderTextColor={t.muted}/><Pressable style={t.fullButton} onPress={saveRouteNow}><Text style={t.primaryText}>SPARA RUTT</Text></Pressable><Pressable style={t.export} onPress={async () => {try {await shareRouteAsGpx(points, routeName || 'RouteMapper-rutt');} catch {setMessage('Kunde inte skapa GPX-filen.');}}}><Text style={t.exportText}>Exportera GPX</Text></Pressable></Sheet>
+  <Sheet visible={sheet === 'edit'} close={() => {setSheet(null); setEditing(null);}} t={t} title="Redigera stopp"><TextInput style={t.input} value={editLabel} onChangeText={setEditLabel} placeholder="Adress eller namn" placeholderTextColor={t.muted}/><Pressable style={t.fullButton} onPress={() => {if (editing) setPoints(current => current.map(point => point.id === editing.id ? {...point, label: editLabel.trim() || point.label} : point)); setSheet(null); setEditing(null);}}><Text style={t.primaryText}>SPARA ÄNDRING</Text></Pressable></Sheet>
+  <Sheet visible={sheet === 'settings'} close={() => setSheet(null)} t={t} title="Inställningar"><View style={t.setting}><View><Text style={t.stopTitle}>Mörkt läge</Text><Text style={t.hint}>Anpassat för kväll och AMOLED-skärmar</Text></View><Switch value={settings.darkMode} onValueChange={value => setSettings(current => ({...current, darkMode: value}))}/></View><View style={t.setting}><Text style={t.stopTitle}>Kartvy</Text><Pressable style={t.radius} onPress={() => setSettings(current => ({...current, mapType: current.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text style={t.radiusText}>{settings.mapType === 'satellite' ? 'Satellit' : 'Karta'}</Text></Pressable></View><Text style={t.section}>Google Maps API-nyckel</Text><TextInput style={t.input} value={apiKey} onChangeText={setApiKey} secureTextEntry autoCapitalize="none" placeholder="API-nyckel" placeholderTextColor={t.muted}/><View style={t.setting}><Pressable onPress={async () => {await clearGoogleMapsApiKey(); setApiKey(''); setMessage('API-nyckeln raderades.');}}><Text style={t.danger}>Radera</Text></Pressable><Pressable style={t.smallButton} onPress={async () => {await saveGoogleMapsApiKey(apiKey); setSheet(null); setMessage('Inställningarna sparades.');}}><Text style={t.primaryText}>Spara</Text></Pressable></View></Sheet>
+  </View>;
 }
 
-const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#fff'},
-  overlay: {flex: 1, justifyContent: 'space-between'},
-  topCard: {marginHorizontal: 10, marginTop: 8, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.96)', elevation: 4},
-  headerRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  headerText: {flex: 1},
-  title: {fontSize: 21, fontWeight: '700'},
-  settingText: {},
-  messageText: {},
-  subtitle: {fontSize: 12, opacity: 0.7},
-  areaText: {marginTop: 5, fontSize: 12, opacity: 0.75},
-  row: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  button: {backgroundColor: '#fff', paddingHorizontal: 11, paddingVertical: 10, borderRadius: 10, elevation: 2},
-  primaryButton: {backgroundColor: '#1769e0', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10},
-  deleteButton: {backgroundColor: '#b42318', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10},
-  primaryText: {color: '#fff', fontWeight: '700'},
-  headerButton: {backgroundColor: '#1769e0', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9},
-  headerButtonText: {color: '#fff', fontWeight: '700', fontSize: 12},
-  stopCard: {marginHorizontal: 10, marginBottom: 8, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.96)', elevation: 4},
-  panelHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5},
-  panelTitle: {fontSize: 16, fontWeight: '700'},
-  action: {color: '#1769e0', fontWeight: '600'},
-  actionDanger: {color: '#b42318', fontWeight: '600'},
-  stopRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 5, gap: 8},
-  number: {width: 28, height: 28, borderRadius: 14, backgroundColor: '#1769e0', alignItems: 'center', justifyContent: 'center'},
-  numberText: {color: '#fff', fontWeight: '700'},
-  stopDetails: {flex: 1},
-  stopName: {fontWeight: '600'},
-  coordinates: {fontSize: 10, opacity: 0.6},
-  smallAction: {padding: 6},
-  bottomBar: {paddingHorizontal: 10},
-  message: {alignSelf: 'center', marginBottom: 8, backgroundColor: '#fff', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, elevation: 3, maxWidth: '90%'},
-  loading: {alignSelf: 'center', flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#fff', padding: 10, borderRadius: 12, elevation: 2},
-  backdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)'},
-  modal: {maxHeight: '86%', backgroundColor: '#fff', padding: 18, borderTopLeftRadius: 22, borderTopRightRadius: 22, gap: 12},
-  smallModal: {marginHorizontal: 18, backgroundColor: '#fff', padding: 18, borderRadius: 18, gap: 12},
-  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'},
-  modalTitle: {fontSize: 19, fontWeight: '700'},
-  searchRow: {flexDirection: 'row', gap: 8, alignItems: 'center'},
-  input: {flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff'},
-  inputFull: {borderWidth: 1, borderColor: '#ccc', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10},
-  result: {paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee'},
-  resultTitle: {fontWeight: '600'},
-  resultHint: {fontSize: 12, opacity: 0.6, marginTop: 2},
-  empty: {paddingVertical: 12, opacity: 0.65},
-  description: {fontSize: 13, color: '#555'},
-  label: {fontWeight: '700'},
-  radius: {paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: '#eee'},
-  radiusSelected: {backgroundColor: '#d5e7ff'},
-  actions: {flexDirection: 'row', justifyContent: 'flex-end', gap: 8},
-  savedRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee'},
-  settingRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 8},
-  sectionTitle: {fontSize: 15, fontWeight: '700', marginTop: 4},
-  status: {fontSize: 12, opacity: 0.65},
-  streetViewContainer: {flex: 1, backgroundColor: '#fff'},
-  streetHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10},
-  webLoading: {flex: 1},
-});
+function Sheet({visible, close, t, title, children}: {visible: boolean; close: () => void; t: ReturnType<typeof theme>; title: string; children: React.ReactNode}) {return <Modal visible={visible} transparent animationType="slide" onRequestClose={close}><KeyboardAvoidingView style={t.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={t.sheet}><View style={t.grabber}/><View style={t.sheetHeader}><Text style={t.sheetTitle}>{title}</Text><Pressable onPress={close}><Text style={t.link}>Stäng</Text></Pressable></View>{children}</View></KeyboardAvoidingView></Modal>;}
 
-
-const darkStyles = {
-  ...styles,
-  ...StyleSheet.create({
-    container: {backgroundColor: '#111827'},
-    topCard: {backgroundColor: 'rgba(17,24,39,0.96)'},
-    stopCard: {backgroundColor: 'rgba(17,24,39,0.96)'},
-    button: {backgroundColor: '#263244'},
-    message: {alignSelf: 'center', marginBottom: 8, backgroundColor: '#263244', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, elevation: 3, maxWidth: '90%'},
-    messageText: {color: '#f8fafc'},
-    loading: {backgroundColor: '#263244'},
-    modal: {backgroundColor: '#111827'},
-    smallModal: {backgroundColor: '#111827'},
-    input: {backgroundColor: '#1f2937', borderColor: '#475569', color: '#f8fafc'},
-    inputFull: {backgroundColor: '#1f2937', borderColor: '#475569', color: '#f8fafc'},
-    result: {borderBottomColor: '#334155'},
-    savedRow: {borderBottomColor: '#334155'},
-    description: {color: '#cbd5e1'},
-    radius: {backgroundColor: '#263244'},
-    radiusSelected: {backgroundColor: '#1d4ed8'},
-    streetViewContainer: {backgroundColor: '#111827'},
-    title: {color: '#f8fafc'},
-    subtitle: {color: '#cbd5e1'},
-    areaText: {color: '#cbd5e1'},
-    panelTitle: {color: '#f8fafc'},
-    stopName: {color: '#f8fafc'},
-    coordinates: {color: '#94a3b8'},
-    modalTitle: {color: '#f8fafc'},
-    resultTitle: {color: '#f8fafc'},
-    resultHint: {color: '#94a3b8'},
-    empty: {color: '#cbd5e1'},
-    label: {color: '#f8fafc'},
-    sectionTitle: {color: '#f8fafc'},
-    status: {color: '#cbd5e1'},
-    settingText: {color: '#f8fafc'},
-  }),
-};
+function theme(dark: boolean) {
+  const bg = dark ? '#101114' : '#f8f8fc', surface = dark ? '#1c1d22' : '#ffffff', text = dark ? '#f3f0f7' : '#1b1b20', muted = dark ? '#bcb8c4' : '#625b71', outline = dark ? '#47464f' : '#ddd9e3', accent = dark ? '#d0bcff' : '#6750a4', onAccent = dark ? '#381e72' : '#fff';
+  return {...StyleSheet.create({page:{flex:1,backgroundColor:bg},safe:{flex:1},header:{paddingHorizontal:24,paddingTop:12,paddingBottom:18,flexDirection:'row',justifyContent:'space-between',alignItems:'center'},brand:{fontSize:25,fontWeight:'800',color:text},meta:{fontSize:13,color:muted,marginTop:2},iconButton:{width:48,height:48,borderRadius:24,backgroundColor:surface,borderWidth:1,borderColor:outline,alignItems:'center',justifyContent:'center'},icon:{fontSize:20,color:accent},content:{flex:1,paddingHorizontal:20},hero:{marginBottom:18},heroTitle:{fontSize:28,fontWeight:'800',color:text},heroText:{fontSize:15,lineHeight:21,color:muted,marginTop:5},primary:{minHeight:56,borderRadius:18,backgroundColor:accent,alignItems:'center',justifyContent:'center',marginBottom:10},primaryText:{color:onAccent,fontWeight:'900',fontSize:13},secondary:{minHeight:52,borderRadius:17,backgroundColor:surface,borderWidth:1,borderColor:outline,justifyContent:'center',paddingHorizontal:18,marginBottom:10},secondaryText:{color:text,fontWeight:'700',fontSize:15},area:{marginTop:5,backgroundColor:dark?'#312d3f':'#eee8f9',borderRadius:14,padding:13,flexDirection:'row',justifyContent:'space-between'},areaText:{color:text,fontSize:13,flex:1},areaPrompt:{color:accent,fontSize:13,fontWeight:'800',paddingVertical:14},link:{color:accent,fontWeight:'800',padding:7},list:{paddingTop:12,paddingBottom:140,gap:8},stop:{minHeight:76,borderRadius:18,backgroundColor:surface,borderWidth:1,borderColor:outline,padding:12,flexDirection:'row',alignItems:'center',gap:10},number:{width:39,height:39,borderRadius:13,backgroundColor:dark?'#312d3f':'#eee8f9',alignItems:'center',justifyContent:'center'},numberText:{color:accent,fontWeight:'800',fontSize:13},copy:{flex:1},stopTitle:{fontSize:15,fontWeight:'700',color:text},hint:{fontSize:12,color:muted,marginTop:3},arrow:{fontSize:18,color:accent,fontWeight:'800',paddingHorizontal:5},disabled:{opacity:.22},delete:{fontSize:27,color:dark?'#ffb4ab':'#ba1a1a'},empty:{alignItems:'center',paddingTop:58,paddingHorizontal:35},emptyIcon:{fontSize:44,color:accent},emptyTitle:{fontSize:19,fontWeight:'800',color:text,marginTop:10},emptyText:{color:muted,textAlign:'center',lineHeight:20,marginTop:5},bottom:{backgroundColor:surface,borderTopWidth:1,borderColor:outline},tabs:{height:68,flexDirection:'row'},tab:{flex:1,alignItems:'center',justifyContent:'center'},tabLabel:{fontSize:13,color:muted,fontWeight:'700'},selected:{color:accent,fontWeight:'900'},routeActions:{flexDirection:'row',gap:10,paddingHorizontal:16,paddingBottom:8},save:{height:53,paddingHorizontal:18,justifyContent:'center',borderRadius:17,backgroundColor:dark?'#312d3f':'#eee8f9'},saveText:{color:accent,fontWeight:'900'},osmand:{height:53,flex:1,borderRadius:17,backgroundColor:accent,alignItems:'center',justifyContent:'center'},toast:{position:'absolute',left:24,right:24,bottom:145,backgroundColor:dark?'#e6e1e5':'#313033',borderRadius:15,padding:14,elevation:8},toastText:{color:dark?'#1d1b20':'#f4eff4',textAlign:'center',fontWeight:'600'},busy:{position:'absolute',top:120,alignSelf:'center',flexDirection:'row',gap:8,alignItems:'center',padding:12,borderRadius:14,backgroundColor:surface,elevation:4},busyText:{color:text,fontWeight:'600'},map:{flex:1},mapCard:{margin:16,backgroundColor:surface,borderRadius:18,padding:16,elevation:4},mapTitle:{fontSize:19,fontWeight:'800',color:text},mapButton:{alignSelf:'flex-start',marginTop:12,backgroundColor:accent,borderRadius:12,paddingHorizontal:14,paddingVertical:10},backdrop:{flex:1,justifyContent:'flex-end',backgroundColor:'rgba(0,0,0,.45)'},sheet:{backgroundColor:surface,borderTopLeftRadius:28,borderTopRightRadius:28,padding:20,gap:14,maxHeight:'88%'},grabber:{alignSelf:'center',width:36,height:4,borderRadius:3,backgroundColor:outline},sheetHeader:{flexDirection:'row',justifyContent:'space-between',alignItems:'center'},sheetTitle:{fontSize:22,fontWeight:'800',color:text},sheetText:{color:muted,fontSize:14,lineHeight:20},input:{minHeight:54,flex:1,borderRadius:15,borderWidth:1,borderColor:outline,paddingHorizontal:14,paddingVertical:12,color:text,fontSize:15,backgroundColor:dark?'#25252b':'#fbf9ff'},multiline:{height:150,paddingTop:14},result:{paddingVertical:15,borderBottomWidth:1,borderColor:outline},fullButton:{height:54,borderRadius:16,backgroundColor:accent,alignItems:'center',justifyContent:'center'},export:{height:48,borderRadius:16,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:outline},exportText:{color:accent,fontWeight:'800'},searchRow:{flexDirection:'row',gap:8},smallButton:{borderRadius:14,backgroundColor:accent,alignItems:'center',justifyContent:'center',paddingHorizontal:16},section:{fontWeight:'800',fontSize:14,color:text},radiusRow:{gap:8},radius:{paddingHorizontal:13,paddingVertical:10,borderRadius:13,borderWidth:1,borderColor:outline,backgroundColor:surface},radiusActive:{backgroundColor:dark?'#4f378b':'#e9ddff',borderColor:accent},radiusText:{color:text,fontWeight:'700',fontSize:13},danger:{color:dark?'#ffb4ab':'#ba1a1a',fontWeight:'800',paddingVertical:7},setting:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:12,paddingVertical:7}}), accent, muted};
+}

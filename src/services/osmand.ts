@@ -10,12 +10,14 @@ export async function openRouteInOsmAnd(points: RoutePoint[], name = 'RouteMappe
   const path = `${RNFS.CachesDirectoryPath}/${fileName}`;
   await RNFS.writeFile(path, createGpx(points, name), 'utf8');
 
+  // react-native-share supports Android's package option, but its published
+  // TypeScript declaration has not caught up with that native capability.
   await Share.open({
     url: `file://${path}`,
     type: 'application/gpx+xml',
     package: 'net.osmand',
     failOnCancel: false,
-  });
+  } as Parameters<typeof Share.open>[0]);
 
   return true;
 }
