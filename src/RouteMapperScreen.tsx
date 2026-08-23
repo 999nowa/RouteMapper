@@ -5,7 +5,6 @@ import {
   Linking,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -14,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import MapView, {Marker, Polyline, type MapPressEvent} from 'react-native-maps';
-import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {searchAddress, searchPlace, type GeocodingResult} from './services/geocoding';
 import {importAddressesFromImage, normalizeAddress} from './services/addressImport';
 import {openRouteInOsmAnd} from './services/osmand';
@@ -503,7 +502,7 @@ export default function RouteMapperScreen() {
 const styles = StyleSheet.create({
   container: {flex: 1, backgroundColor: '#fff'},
   overlay: {flex: 1, justifyContent: 'space-between'},
-  topCard: {margin: 10, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.96)', elevation: 4},
+  topCard: {marginHorizontal: 10, marginTop: 8, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.96)', elevation: 4},
   headerRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
   headerText: {flex: 1},
   title: {fontSize: 21, fontWeight: '700'},
