@@ -7,6 +7,7 @@ export type AppSettings = {
   autoFitRoute: boolean;
   showStops: boolean;
   searchRadiusKm: number;
+  darkMode: boolean;
 };
 
 const STORAGE_KEY = '@routemapper/settings/v1';
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoFitRoute: true,
   showStops: true,
   searchRadiusKm: 25,
+  darkMode: true,
 };
 
 export async function loadAppSettings(): Promise<AppSettings> {
@@ -30,6 +32,7 @@ export async function loadAppSettings(): Promise<AppSettings> {
       autoFitRoute: parsed.autoFitRoute !== false,
       showStops: parsed.showStops !== false,
       searchRadiusKm: Number.isFinite(parsed.searchRadiusKm) ? Number(parsed.searchRadiusKm) : DEFAULT_SETTINGS.searchRadiusKm,
+      darkMode: parsed.darkMode !== false,
     };
   } catch {
     return DEFAULT_SETTINGS;
