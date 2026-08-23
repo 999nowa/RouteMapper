@@ -1,0 +1,3 @@
+export const DEFAULT_MAP_ZOOM = 15;
+export const DEFAULT_LATITUDE_DELTA = 0.02;
+export const DEFAULT_LONGITUDE_DELTA = 0.02;
