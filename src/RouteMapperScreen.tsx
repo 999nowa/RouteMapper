@@ -138,6 +138,33 @@ export default function RouteMapperScreen() {
     mapRef.current?.animateToRegion({...currentCoordinate, latitudeDelta: 0.04, longitudeDelta: 0.04}, 500);
   };
 
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 3) {
+      setResults([]);
+      setBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const nextResults = await searchAddress(trimmed);
+        if (!cancelled) setResults(nextResults);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
   const performSearch = async () => {
     if (!query.trim()) return;
     setBusy(true);
