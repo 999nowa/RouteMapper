@@ -1,9 +1,18 @@
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import MapView, { Marker, type MapPressEvent } from 'react-native-maps';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { RouteMap } from './src/components/MapView';
+import { DEFAULT_LATITUDE_DELTA, DEFAULT_LONGITUDE_DELTA } from './src/constants/map';
 import { useCurrentLocation } from './src/hooks/useCurrentLocation';
+import type { Coordinate } from './src/types/location';
 import type { RoutePoint } from './src/types/route';
 
 function App() {
@@ -20,12 +29,16 @@ function AppContent() {
   const { location, error } = useCurrentLocation();
   const [points, setPoints] = useState<RoutePoint[]>([]);
 
-  const center = useMemo(
-    () => (location ? { latitude: location.latitude, longitude: location.longitude } : undefined),
+  const userCoordinate = useMemo<Coordinate | undefined>(
+    () =>
+      location
+        ? { latitude: location.latitude, longitude: location.longitude }
+        : undefined,
     [location],
   );
 
-  const addPoint = (coordinate: { latitude: number; longitude: number }) => {
+  const addPoint = (event: MapPressEvent) => {
+    const coordinate = event.nativeEvent.coordinate;
     setPoints(current => [
       ...current,
       {
@@ -36,16 +49,40 @@ function AppContent() {
     ]);
   };
 
-  const clearPoints = () => setPoints([]);
-
   return (
     <View style={styles.container}>
-      <RouteMap center={center} userLocation={center} points={points} onMapPress={addPoint} />
+      {userCoordinate ? (
+        <MapView
+          style={StyleSheet.absoluteFill}
+          initialRegion={{
+            ...userCoordinate,
+            latitudeDelta: DEFAULT_LATITUDE_DELTA,
+            longitudeDelta: DEFAULT_LONGITUDE_DELTA,
+          }}
+          showsUserLocation
+          showsMyLocationButton
+          onPress={addPoint}>
+          {points.map(point => (
+            <Marker
+              key={point.id}
+              coordinate={point}
+              title={point.label}
+              description={`${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}`}
+            />
+          ))}
+        </MapView>
+      ) : (
+        <View style={styles.emptyMap} />
+      )}
 
       <View style={[styles.header, { top: insets.top + 12 }]}>
         <Text style={styles.title}>RouteMapper</Text>
         <Text style={styles.subtitle}>
-          {location ? `${points.length} stopp` : error ? 'Kunde inte hämta position' : 'Hämtar position...'}
+          {location
+            ? `${points.length} stopp`
+            : error
+              ? 'Kunde inte hämta position'
+              : 'Hämtar position...'}
         </Text>
       </View>
 
@@ -65,7 +102,7 @@ function AppContent() {
       {points.length > 0 ? (
         <Pressable
           accessibilityRole="button"
-          onPress={clearPoints}
+          onPress={() => setPoints([])}
           style={[styles.clearButton, { bottom: insets.bottom + 20 }]}>
           <Text style={styles.clearButtonText}>Rensa stopp</Text>
         </Pressable>
@@ -80,6 +117,7 @@ function AppContent() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  emptyMap: { ...StyleSheet.absoluteFillObject, backgroundColor: '#e9e9e9' },
   header: {
     position: 'absolute',
     left: 16,
