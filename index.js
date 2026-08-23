@@ -2,8 +2,14 @@
  * @format
  */
 
-import { AppRegistry } from 'react-native';
-import App from './App';
-import { name as appName } from './app.json';
+import React from 'react';
+import {AppRegistry, StatusBar} from 'react-native';
+import {SafeAreaProvider} from 'react-native-safe-area-context';
+import RouteMapperScreen from './src/RouteMapperScreen';
+import {name as appName} from './app.json';
 
-AppRegistry.registerComponent(appName, () => App);
+function Root() {
+  return <SafeAreaProvider><StatusBar barStyle="dark-content" /><RouteMapperScreen /></SafeAreaProvider>;
+}
+
+AppRegistry.registerComponent(appName, () => Root);
