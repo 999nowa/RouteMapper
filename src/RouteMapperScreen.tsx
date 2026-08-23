@@ -2,6 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   Pressable,
   SafeAreaView,
@@ -13,7 +14,6 @@ import {
   View,
 } from 'react-native';
 import MapView, {Marker, Polyline, type MapPressEvent} from 'react-native-maps';
-import {WebView} from 'react-native-webview';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {searchAddress, searchPlace, type GeocodingResult} from './services/geocoding';
 import {importAddressesFromImage, normalizeAddress} from './services/addressImport';
@@ -60,7 +60,7 @@ export default function RouteMapperScreen() {
   const [message, setMessage] = useState('');
   const [editingPoint, setEditingPoint] = useState<RoutePoint | null>(null);
   const [editLabel, setEditLabel] = useState('');
-  const [streetViewPoint, setStreetViewPoint] = useState<RoutePoint | null>(null);
+  const [stopsOpen, setStopsOpen] = useState(false);
 
   const currentCoordinate = useMemo<Coordinate | undefined>(
     () => location ? {latitude: location.latitude, longitude: location.longitude} : undefined,
@@ -82,6 +82,23 @@ export default function RouteMapperScreen() {
   useEffect(() => {
     saveAppSettings(settings).catch(() => undefined);
   }, [settings]);
+
+  useEffect(() => {
+    if (!message) return;
+    const timeout = setTimeout(() => setMessage(''), 3200);
+    return () => clearTimeout(timeout);
+  }, [message]);
+
+  const theme = settings.darkMode ? darkStyles : styles;
+
+  const openStreetView = async (point: RoutePoint) => {
+    const url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${point.latitude},${point.longitude}&language=sv`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      setMessage('Kunde inte öppna Google Maps för Street View.');
+    }
+  };
 
   const addPoint = (coordinate: Coordinate, label?: string) => {
     setPoints(current => {
@@ -289,7 +306,7 @@ export default function RouteMapperScreen() {
       return;
     }
     try {
-      const opened = await openRouteInOsmAnd(points, currentCoordinate ? {id: 'current', ...currentCoordinate} : undefined);
+      const opened = await openRouteInOsmAnd(points, routeName.trim() || 'RouteMapper route');
       setMessage(opened ? 'Rutten skickades till OsmAnd.' : 'Kunde inte öppna OsmAnd.');
     } catch {
       setMessage('Kunde inte öppna OsmAnd. Kontrollera att OsmAnd är installerat.');
@@ -322,12 +339,8 @@ export default function RouteMapperScreen() {
     ]);
   };
 
-  const streetViewUrl = streetViewPoint
-    ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${streetViewPoint.latitude},${streetViewPoint.longitude}&language=sv`
-    : undefined;
-
   return (
-    <View style={styles.container}>
+    <View style={theme.container}>
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -343,131 +356,127 @@ export default function RouteMapperScreen() {
             key={point.id}
             coordinate={point}
             title={`${index + 1}. ${point.label ?? `Stopp ${index + 1}`}`}
-            onPress={() => setStreetViewPoint(point)}
+            onPress={() => openStreetView(point)}
           />
         )) : null}
         {points.length > 1 ? <Polyline coordinates={points} strokeWidth={4} strokeColor="#1769e0" /> : null}
         {area ? <Marker coordinate={area} pinColor="#7a4cff" title="Sökområde" /> : null}
       </MapView>
 
-      <SafeAreaView style={styles.overlay}>
-        <View style={styles.topCard}>
-          <View style={styles.headerRow}>
-            <View style={styles.headerText}>
-              <Text style={styles.title}>RouteMapper</Text>
-              <Text style={styles.subtitle}>{points.length} stopp{locationError ? ' · GPS ej tillgänglig' : ''}</Text>
+      <SafeAreaView style={theme.overlay}>
+        <View style={theme.topCard}>
+          <View style={theme.headerRow}>
+            <View style={theme.headerText}>
+              <Text style={theme.title}>RouteMapper</Text>
+              <Text style={theme.subtitle}>{points.length} stopp{locationError ? ' · GPS ej tillgänglig' : ''}</Text>
             </View>
-            <Pressable style={styles.headerButton} onPress={() => setAreaOpen(true)}><Text style={styles.headerButtonText}>{area ? 'Område' : 'Sökområde'}</Text></Pressable>
-            <Pressable style={styles.headerButton} onPress={openSettings}><Text style={styles.headerButtonText}>Inställningar</Text></Pressable>
+            <Pressable style={theme.headerButton} onPress={() => setAreaOpen(true)}><Text style={theme.headerButtonText}>{area ? 'Område' : 'Sökområde'}</Text></Pressable>
+            <Pressable style={theme.headerButton} onPress={openSettings}><Text style={theme.headerButtonText}>Inställningar</Text></Pressable>
           </View>
-          {area ? <Text style={styles.areaText} numberOfLines={1}>{area.name} · {area.radiusKm} km</Text> : null}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-            <Pressable style={styles.button} onPress={() => setSearchOpen(true)}><Text>Sök adress</Text></Pressable>
-            <Pressable style={styles.button} onPress={importImage}><Text>Bild</Text></Pressable>
-            <Pressable style={styles.button} onPress={centerOnLocation}><Text>Min position</Text></Pressable>
-            <Pressable style={styles.button} onPress={fitRoute}><Text>Visa rutt</Text></Pressable>
-            <Pressable style={styles.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Karta' : 'Satellit'}</Text></Pressable>
-            <Pressable style={styles.button} onPress={() => points.length ? setStreetViewPoint(points[points.length - 1]) : setMessage('Lägg till ett stopp först.')}><Text>Street View</Text></Pressable>
+          {area ? <Text style={theme.areaText} numberOfLines={1}>{area.name} · {area.radiusKm} km</Text> : null}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>
+            <Pressable style={theme.button} onPress={() => setSearchOpen(true)}><Text>Sök adress</Text></Pressable>
+            <Pressable style={theme.button} onPress={importImage}><Text>Bild</Text></Pressable>
+            <Pressable style={theme.button} onPress={centerOnLocation}><Text>Min position</Text></Pressable>
+            <Pressable style={theme.button} onPress={fitRoute}><Text>Visa rutt</Text></Pressable>
+            <Pressable style={theme.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Karta' : 'Satellit'}</Text></Pressable>
+            <Pressable style={theme.button} onPress={() => points.length ? openStreetView(points[points.length - 1]) : setMessage('Lägg till ett stopp först.')}><Text>Street View</Text></Pressable>
           </ScrollView>
         </View>
 
         {points.length ? (
-          <View style={styles.stopCard}>
-            <View style={styles.panelHeader}>
-              <Text style={styles.panelTitle}>Stopp ({points.length})</Text>
-              <View style={styles.row}>
-                <Pressable onPress={() => setSettings(s => ({...s, showStops: !s.showStops}))}><Text style={styles.action}>{settings.showStops ? 'Dölj' : 'Visa'}</Text></Pressable>
-                <Pressable onPress={clearPoints}><Text style={styles.actionDanger}>Rensa</Text></Pressable>
+          <View style={theme.stopCard}>
+            <View style={theme.panelHeader}>
+              <Text style={theme.panelTitle}>Senaste stopp ({points.length})</Text>
+              <View style={theme.row}>
+                <Pressable onPress={() => setSettings(s => ({...s, showStops: !s.showStops}))}><Text style={theme.action}>{settings.showStops ? 'Dölj' : 'Visa'}</Text></Pressable>
+                <Pressable onPress={() => setStopsOpen(true)}><Text style={theme.action}>Alla</Text></Pressable><Pressable onPress={clearPoints}><Text style={theme.actionDanger}>Rensa</Text></Pressable>
               </View>
             </View>
-            {points.slice(-6).map((point, index, visible) => {
+            {points.slice(-3).map((point, index, visible) => {
               const actual = points.length - visible.length + index;
               return (
-                <View key={point.id} style={styles.stopRow}>
-                  <View style={styles.number}><Text style={styles.numberText}>{actual + 1}</Text></View>
-                  <Pressable style={styles.stopDetails} onPress={() => openEditor(point)}>
-                    <Text style={styles.stopName} numberOfLines={1}>{point.label}</Text>
-                    <Text style={styles.coordinates}>{point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
+                <View key={point.id} style={theme.stopRow}>
+                  <View style={theme.number}><Text style={theme.numberText}>{actual + 1}</Text></View>
+                  <Pressable style={theme.stopDetails} onPress={() => openEditor(point)}>
+                    <Text style={theme.stopName} numberOfLines={1}>{point.label}</Text>
+                    <Text style={theme.coordinates}>{point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
                   </Pressable>
-                  <Pressable onPress={() => setStreetViewPoint(point)} style={styles.smallAction}><Text>SV</Text></Pressable>
-                  <Pressable onPress={() => removePoint(point.id)} style={styles.smallAction}><Text style={styles.actionDanger}>×</Text></Pressable>
+                  <Pressable onPress={() => openStreetView(point)} style={theme.smallAction}><Text>SV</Text></Pressable>
+                  <Pressable onPress={() => removePoint(point.id)} style={theme.smallAction}><Text style={theme.actionDanger}>×</Text></Pressable>
                 </View>
               );
             })}
           </View>
         ) : null}
 
-        {busy ? <View style={styles.loading}><ActivityIndicator /><Text>Arbetar...</Text></View> : null}
-        {message ? <Pressable style={styles.message} onPress={() => setMessage('')}><Text>{message}</Text></Pressable> : null}
+        {busy ? <View style={theme.loading}><ActivityIndicator /><Text>Arbetar...</Text></View> : null}
+        {message ? <View style={theme.message}><Text style={theme.messageText}>{message}</Text></View> : null}
 
-        <View style={[styles.bottomBar, {paddingBottom: insets.bottom + 8}]}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-            <Pressable style={styles.button} onPress={() => setSavedOpen(true)}><Text>Sparade</Text></Pressable>
-            {points.length ? <Pressable style={styles.button} onPress={() => setSaveOpen(true)}><Text>Spara</Text></Pressable> : null}
-            {points.length ? <Pressable style={styles.button} onPress={exportGpx}><Text>Exportera GPX</Text></Pressable> : null}
-            {points.length ? <Pressable style={styles.primaryButton} onPress={navigateWithOsmAnd}><Text style={styles.primaryText}>Navigera i OsmAnd</Text></Pressable> : null}
+        <View style={[theme.bottomBar, {paddingBottom: insets.bottom + 8}]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>
+            <Pressable style={theme.button} onPress={() => setSavedOpen(true)}><Text>Sparade</Text></Pressable>
+            {points.length ? <Pressable style={theme.button} onPress={() => setSaveOpen(true)}><Text>Spara</Text></Pressable> : null}
+            {points.length ? <Pressable style={theme.button} onPress={exportGpx}><Text>Exportera GPX</Text></Pressable> : null}
+            {points.length ? <Pressable style={theme.primaryButton} onPress={navigateWithOsmAnd}><Text style={theme.primaryText}>Navigera i OsmAnd</Text></Pressable> : null}
           </ScrollView>
         </View>
       </SafeAreaView>
 
       <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
-        <View style={styles.backdrop}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>Sök adress</Text><Pressable onPress={() => setSearchOpen(false)}><Text style={styles.action}>Stäng</Text></Pressable></View>
-          <View style={styles.searchRow}><TextInput style={styles.input} value={query} onChangeText={setQuery} onSubmitEditing={performSearch} placeholder="Gata, nummer och ort" autoFocus /><Pressable style={styles.primaryButton} onPress={performSearch}><Text style={styles.primaryText}>Sök</Text></Pressable></View>
-          {results.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={styles.result} onPress={() => selectAddress(result)}><Text style={styles.resultTitle}>{result.displayName}</Text><Text style={styles.resultHint}>Tryck för att lägga till</Text></Pressable>)}
-          {!busy && query.trim() && !results.length ? <Text style={styles.empty}>Inga träffar.</Text> : null}
+        <View style={theme.backdrop}><View style={theme.modal}>
+          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sök adress</Text><Pressable onPress={() => setSearchOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
+          <View style={theme.searchRow}><TextInput style={theme.input} value={query} onChangeText={setQuery} onSubmitEditing={performSearch} placeholder="Gata, nummer och ort" autoFocus /><Pressable style={theme.primaryButton} onPress={performSearch}><Text style={theme.primaryText}>Sök</Text></Pressable></View>
+          {results.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => selectAddress(result)}><Text style={theme.resultTitle}>{result.displayName}</Text><Text style={theme.resultHint}>Tryck för att lägga till</Text></Pressable>)}
+          {!busy && query.trim() && !results.length ? <Text style={theme.empty}>Inga träffar.</Text> : null}
         </View></View>
       </Modal>
 
       <Modal visible={areaOpen} transparent animationType="slide" onRequestClose={() => setAreaOpen(false)}>
-        <View style={styles.backdrop}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>Sökområde</Text><Pressable onPress={() => setAreaOpen(false)}><Text style={styles.action}>Stäng</Text></Pressable></View>
-          <Text style={styles.description}>Adressökningen prioriterar träffar inom det valda området.</Text>
-          <View style={styles.searchRow}><TextInput style={styles.input} value={areaQuery} onChangeText={setAreaQuery} onSubmitEditing={searchAreaPlace} placeholder="Sök plats" /><Pressable style={styles.primaryButton} onPress={searchAreaPlace}><Text style={styles.primaryText}>Sök</Text></Pressable></View>
-          {areaResults.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={styles.result} onPress={() => chooseArea(result)}><Text style={styles.resultTitle}>{result.displayName}</Text></Pressable>)}
-          <Text style={styles.label}>Radie</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>{RADII.map(radius => <Pressable key={radius} style={[styles.radius, areaRadius === radius ? styles.radiusSelected : null]} onPress={() => {setAreaRadius(radius); setSettings(s => ({...s, searchRadiusKm: radius}));}}><Text>{radius} km</Text></Pressable>)}</ScrollView>
-          <View style={styles.row}>{area ? <Pressable style={styles.deleteButton} onPress={resetArea}><Text style={styles.primaryText}>Rensa område</Text></Pressable> : null}</View>
+        <View style={theme.backdrop}><View style={theme.modal}>
+          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sökområde</Text><Pressable onPress={() => setAreaOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
+          <Text style={theme.description}>Adressökningen prioriterar träffar inom det valda området.</Text>
+          <View style={theme.searchRow}><TextInput style={theme.input} value={areaQuery} onChangeText={setAreaQuery} onSubmitEditing={searchAreaPlace} placeholder="Sök plats" /><Pressable style={theme.primaryButton} onPress={searchAreaPlace}><Text style={theme.primaryText}>Sök</Text></Pressable></View>
+          {areaResults.map(result => <Pressable key={`${result.latitude}-${result.longitude}-${result.displayName}`} style={theme.result} onPress={() => chooseArea(result)}><Text style={theme.resultTitle}>{result.displayName}</Text></Pressable>)}
+          <Text style={theme.label}>Radie</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={theme.row}>{RADII.map(radius => <Pressable key={radius} style={[theme.radius, areaRadius === radius ? theme.radiusSelected : null]} onPress={() => {setAreaRadius(radius); setSettings(s => ({...s, searchRadiusKm: radius}));}}><Text>{radius} km</Text></Pressable>)}</ScrollView>
+          <View style={theme.row}>{area ? <Pressable style={theme.deleteButton} onPress={resetArea}><Text style={theme.primaryText}>Rensa område</Text></Pressable> : null}</View>
         </View></View>
       </Modal>
 
       <Modal visible={saveOpen} transparent animationType="fade" onRequestClose={() => setSaveOpen(false)}>
-        <View style={styles.backdrop}><View style={styles.smallModal}><Text style={styles.modalTitle}>Spara rutt</Text><TextInput style={styles.inputFull} value={routeName} onChangeText={setRouteName} placeholder="Ruttnamn"/><View style={styles.actions}><Pressable style={styles.button} onPress={() => setSaveOpen(false)}><Text>Avbryt</Text></Pressable><Pressable style={styles.primaryButton} onPress={saveCurrentRoute}><Text style={styles.primaryText}>Spara</Text></Pressable></View></View></View>
+        <View style={theme.backdrop}><View style={theme.smallModal}><Text style={theme.modalTitle}>Spara rutt</Text><TextInput style={theme.inputFull} value={routeName} onChangeText={setRouteName} placeholder="Ruttnamn"/><View style={theme.actions}><Pressable style={theme.button} onPress={() => setSaveOpen(false)}><Text>Avbryt</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveCurrentRoute}><Text style={theme.primaryText}>Spara</Text></Pressable></View></View></View>
       </Modal>
 
       <Modal visible={savedOpen} transparent animationType="slide" onRequestClose={() => setSavedOpen(false)}>
-        <View style={styles.backdrop}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>Sparade rutter</Text><Pressable onPress={() => setSavedOpen(false)}><Text style={styles.action}>Stäng</Text></Pressable></View>
-          {routes.map(route => <View key={route.id} style={styles.savedRow}><Pressable style={styles.stopDetails} onPress={() => loadSavedRoute(route)}><Text style={styles.resultTitle}>{route.name}</Text><Text style={styles.resultHint}>{route.points.length} stopp</Text></Pressable><Pressable onPress={() => removeSavedRoute(route)}><Text style={styles.actionDanger}>Ta bort</Text></Pressable></View>)}
-          {!routes.length ? <Text style={styles.empty}>Inga sparade rutter.</Text> : null}
+        <View style={theme.backdrop}><View style={theme.modal}>
+          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sparade rutter</Text><Pressable onPress={() => setSavedOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
+          {routes.map(route => <View key={route.id} style={theme.savedRow}><Pressable style={theme.stopDetails} onPress={() => loadSavedRoute(route)}><Text style={theme.resultTitle}>{route.name}</Text><Text style={theme.resultHint}>{route.points.length} stopp</Text></Pressable><Pressable onPress={() => removeSavedRoute(route)}><Text style={theme.actionDanger}>Ta bort</Text></Pressable></View>)}
+          {!routes.length ? <Text style={theme.empty}>Inga sparade rutter.</Text> : null}
         </View></View>
       </Modal>
 
       <Modal visible={settingsOpen} transparent animationType="slide" onRequestClose={() => setSettingsOpen(false)}>
-        <View style={styles.backdrop}><View style={styles.modal}>
-          <View style={styles.modalHeader}><Text style={styles.modalTitle}>Inställningar</Text><Pressable onPress={() => setSettingsOpen(false)}><Text style={styles.action}>Stäng</Text></Pressable></View>
-          <Text style={styles.sectionTitle}>Karta</Text>
-          <View style={styles.settingRow}><View style={styles.stopDetails}><Text>Automatisk inpassning</Text><Text style={styles.resultHint}>Visa hela rutten efter sökning och import</Text></View><Switch value={settings.autoFitRoute} onValueChange={value => setSettings(s => ({...s, autoFitRoute: value}))}/></View>
-          <View style={styles.settingRow}><View style={styles.stopDetails}><Text>Visa stoppmarkörer</Text></View><Switch value={settings.showStops} onValueChange={value => setSettings(s => ({...s, showStops: value}))}/></View>
-          <View style={styles.settingRow}><Text>Standardvy</Text><Pressable style={styles.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Satellit' : 'Karta'}</Text></Pressable></View>
-          <Text style={styles.sectionTitle}>Google API-nyckel</Text>
-          <Text style={styles.description}>Nyckeln för adressökning sparas endast lokalt på enheten.</Text>
-          <TextInput style={styles.inputFull} value={apiKeyInput} onChangeText={setApiKeyInput} placeholder="API-nyckel" autoCapitalize="none" autoCorrect={false} secureTextEntry />
-          <Text style={styles.status}>{hasApiKey ? 'API-nyckel konfigurerad' : 'Ingen lokal API-nyckel konfigurerad'}</Text>
-          <View style={styles.actions}><Pressable style={styles.button} onPress={removeApiKey}><Text>Radera nyckel</Text></Pressable><Pressable style={styles.primaryButton} onPress={saveApiKey}><Text style={styles.primaryText}>Spara</Text></Pressable></View>
+        <View style={theme.backdrop}><View style={theme.modal}>
+          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Inställningar</Text><Pressable onPress={() => setSettingsOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
+          <Text style={theme.sectionTitle}>Utseende</Text>
+          <View style={theme.settingRow}><View style={theme.stopDetails}><Text style={theme.settingText}>Mörkt läge</Text><Text style={theme.resultHint}>Använd mörkare paneler och dialoger</Text></View><Switch value={settings.darkMode} onValueChange={value => setSettings(s => ({...s, darkMode: value}))}/></View>
+          <Text style={theme.sectionTitle}>Karta</Text>
+          <View style={theme.settingRow}><View style={theme.stopDetails}><Text>Automatisk inpassning</Text><Text style={theme.resultHint}>Visa hela rutten efter sökning och import</Text></View><Switch value={settings.autoFitRoute} onValueChange={value => setSettings(s => ({...s, autoFitRoute: value}))}/></View>
+          <View style={theme.settingRow}><View style={theme.stopDetails}><Text>Visa stoppmarkörer</Text></View><Switch value={settings.showStops} onValueChange={value => setSettings(s => ({...s, showStops: value}))}/></View>
+          <View style={theme.settingRow}><Text>Standardvy</Text><Pressable style={theme.button} onPress={() => setSettings(s => ({...s, mapType: s.mapType === 'satellite' ? 'standard' : 'satellite'}))}><Text>{settings.mapType === 'satellite' ? 'Satellit' : 'Karta'}</Text></Pressable></View>
+          <Text style={theme.sectionTitle}>Google API-nyckel</Text>
+          <Text style={theme.description}>Nyckeln för adressökning sparas endast lokalt på enheten.</Text>
+          <TextInput style={theme.inputFull} value={apiKeyInput} onChangeText={setApiKeyInput} placeholder="API-nyckel" autoCapitalize="none" autoCorrect={false} secureTextEntry />
+          <Text style={theme.status}>{hasApiKey ? 'API-nyckel konfigurerad' : 'Ingen lokal API-nyckel konfigurerad'}</Text>
+          <View style={theme.actions}><Pressable style={theme.button} onPress={removeApiKey}><Text>Radera nyckel</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveApiKey}><Text style={theme.primaryText}>Spara</Text></Pressable></View>
         </View></View>
       </Modal>
 
       <Modal visible={Boolean(editingPoint)} transparent animationType="fade" onRequestClose={() => setEditingPoint(null)}>
-        <View style={styles.backdrop}><View style={styles.smallModal}><Text style={styles.modalTitle}>Redigera stopp</Text><TextInput style={styles.inputFull} value={editLabel} onChangeText={setEditLabel} placeholder="Namn"/><View style={styles.actions}><Pressable style={styles.button} onPress={() => setEditingPoint(null)}><Text>Avbryt</Text></Pressable><Pressable style={styles.primaryButton} onPress={saveEditedPoint}><Text style={styles.primaryText}>Spara</Text></Pressable></View></View></View>
+        <View style={theme.backdrop}><View style={theme.smallModal}><Text style={theme.modalTitle}>Redigera stopp</Text><TextInput style={theme.inputFull} value={editLabel} onChangeText={setEditLabel} placeholder="Namn"/><View style={theme.actions}><Pressable style={theme.button} onPress={() => setEditingPoint(null)}><Text>Avbryt</Text></Pressable><Pressable style={theme.primaryButton} onPress={saveEditedPoint}><Text style={theme.primaryText}>Spara</Text></Pressable></View></View></View>
       </Modal>
 
-      <Modal visible={Boolean(streetViewPoint)} animationType="slide" onRequestClose={() => setStreetViewPoint(null)}>
-        <SafeAreaView style={styles.streetViewContainer}>
-          <View style={styles.streetHeader}><Text style={styles.modalTitle}>Street View</Text><Pressable onPress={() => setStreetViewPoint(null)}><Text style={styles.action}>Stäng</Text></Pressable></View>
-          {streetViewUrl ? <WebView source={{uri: streetViewUrl}} javaScriptEnabled domStorageEnabled startInLoadingState renderLoading={() => <ActivityIndicator style={styles.webLoading} />} /> : null}
-        </SafeAreaView>
-      </Modal>
     </View>
   );
 }
@@ -528,3 +537,27 @@ const styles = StyleSheet.create({
   streetHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10},
   webLoading: {flex: 1},
 });
+
+
+const darkStyles = {
+  ...styles,
+  ...StyleSheet.create({
+    container: {backgroundColor: '#111827'},
+    topCard: {backgroundColor: 'rgba(17,24,39,0.96)'},
+    stopCard: {backgroundColor: 'rgba(17,24,39,0.96)'},
+    button: {backgroundColor: '#263244'},
+    message: {alignSelf: 'center', marginBottom: 8, backgroundColor: '#263244', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, elevation: 3, maxWidth: '90%'},
+    messageText: {color: '#f8fafc'},
+    loading: {backgroundColor: '#263244'},
+    modal: {backgroundColor: '#111827'},
+    smallModal: {backgroundColor: '#111827'},
+    input: {backgroundColor: '#1f2937', borderColor: '#475569', color: '#f8fafc'},
+    inputFull: {backgroundColor: '#1f2937', borderColor: '#475569', color: '#f8fafc'},
+    result: {borderBottomColor: '#334155'},
+    savedRow: {borderBottomColor: '#334155'},
+    description: {color: '#cbd5e1'},
+    radius: {backgroundColor: '#263244'},
+    radiusSelected: {backgroundColor: '#1d4ed8'},
+    streetViewContainer: {backgroundColor: '#111827'},
+  }),
+};
