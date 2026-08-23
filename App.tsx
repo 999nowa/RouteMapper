@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,13 +7,20 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Marker, type MapPressEvent } from 'react-native-maps';
+import MapView, { Marker, Polyline, type MapPressEvent } from 'react-native-maps';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DEFAULT_LATITUDE_DELTA, DEFAULT_LONGITUDE_DELTA } from './src/constants/map';
 import { useCurrentLocation } from './src/hooks/useCurrentLocation';
 import type { Coordinate } from './src/types/location';
 import type { RoutePoint } from './src/types/route';
+
+const FALLBACK_REGION = {
+  latitude: 59.3293,
+  longitude: 18.0686,
+  latitudeDelta: 8,
+  longitudeDelta: 8,
+};
 
 function App() {
   return (
@@ -26,6 +33,7 @@ function App() {
 
 function AppContent() {
   const insets = useSafeAreaInsets();
+  const mapRef = useRef<MapView>(null);
   const { location, error } = useCurrentLocation();
   const [points, setPoints] = useState<RoutePoint[]>([]);
 
@@ -49,39 +57,67 @@ function AppContent() {
     ]);
   };
 
+  const centerOnLocation = () => {
+    if (!userCoordinate) return;
+
+    mapRef.current?.animateToRegion(
+      {
+        ...userCoordinate,
+        latitudeDelta: DEFAULT_LATITUDE_DELTA,
+        longitudeDelta: DEFAULT_LONGITUDE_DELTA,
+      },
+      500,
+    );
+  };
+
+  const clearPoints = () => setPoints([]);
+
   return (
     <View style={styles.container}>
-      {userCoordinate ? (
-        <MapView
-          style={StyleSheet.absoluteFill}
-          initialRegion={{
-            ...userCoordinate,
-            latitudeDelta: DEFAULT_LATITUDE_DELTA,
-            longitudeDelta: DEFAULT_LONGITUDE_DELTA,
-          }}
-          showsUserLocation
-          showsMyLocationButton
-          onPress={addPoint}>
-          {points.map(point => (
-            <Marker
-              key={point.id}
-              coordinate={point}
-              title={point.label}
-              description={`${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}`}
-            />
-          ))}
-        </MapView>
-      ) : (
-        <View style={styles.emptyMap} />
-      )}
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFill}
+        initialRegion={
+          userCoordinate
+            ? {
+                ...userCoordinate,
+                latitudeDelta: DEFAULT_LATITUDE_DELTA,
+                longitudeDelta: DEFAULT_LONGITUDE_DELTA,
+              }
+            : FALLBACK_REGION
+        }
+        showsUserLocation={Boolean(userCoordinate)}
+        showsMyLocationButton={false}
+        showsCompass
+        toolbarEnabled
+        onPress={addPoint}>
+        {points.map(point => (
+          <Marker
+            key={point.id}
+            coordinate={point}
+            title={point.label}
+            description={`${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}`}
+          />
+        ))}
+
+        {points.length > 1 ? (
+          <Polyline
+            coordinates={points}
+            strokeWidth={5}
+            strokeColor="#1769e0"
+          />
+        ) : null}
+      </MapView>
 
       <View style={[styles.header, { top: insets.top + 12 }]}>
         <Text style={styles.title}>RouteMapper</Text>
         <Text style={styles.subtitle}>
           {location
-            ? `${points.length} stopp`
+            ? points.length === 0
+              ? 'Tryck på kartan för att lägga till stopp'
+              : `${points.length} stopp i rutten`
             : error
-              ? 'Kunde inte hämta position'
+              ? 'Positionen kunde inte hämtas'
               : 'Hämtar position...'}
         </Text>
       </View>
@@ -99,36 +135,57 @@ function AppContent() {
         </View>
       ) : null}
 
-      {points.length > 0 ? (
+      <View style={[styles.controls, { bottom: insets.bottom + 20 }]}>
         <Pressable
           accessibilityRole="button"
-          onPress={() => setPoints([])}
-          style={[styles.clearButton, { bottom: insets.bottom + 20 }]}>
-          <Text style={styles.clearButtonText}>Rensa stopp</Text>
+          accessibilityLabel="Centrera på min position"
+          disabled={!userCoordinate}
+          onPress={centerOnLocation}
+          style={({ pressed }) => [styles.controlButton, pressed && styles.pressed]}>
+          <Text style={styles.controlIcon}>⌖</Text>
+          <Text style={styles.controlText}>Min position</Text>
         </Pressable>
-      ) : null}
 
-      <View style={[styles.hint, { bottom: insets.bottom + 20 }]}>
-        <Text style={styles.hintText}>Tryck på kartan för att lägga till ett stopp</Text>
+        {points.length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Rensa alla stopp"
+            onPress={clearPoints}
+            style={({ pressed }) => [styles.controlButton, styles.darkButton, pressed && styles.pressed]}>
+            <Text style={styles.controlTextDark}>Rensa stopp</Text>
+          </Pressable>
+        ) : null}
       </View>
+
+      {points.length > 0 ? (
+        <View style={[styles.routeSummary, { bottom: insets.bottom + 86 }]}>
+          <Text style={styles.routeSummaryTitle}>Rutt</Text>
+          <Text style={styles.routeSummaryText}>
+            {points.length} {points.length === 1 ? 'stopp' : 'stopp'} • Tryck på kartan för nästa
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  emptyMap: { ...StyleSheet.absoluteFillObject, backgroundColor: '#e9e9e9' },
   header: {
     position: 'absolute',
     left: 16,
     right: 16,
     padding: 14,
     borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.94)',
-    elevation: 4,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
   title: { fontSize: 22, fontWeight: '700', color: '#111' },
-  subtitle: { marginTop: 2, fontSize: 13, color: '#555' },
+  subtitle: { marginTop: 3, fontSize: 13, color: '#555' },
   loadingCard: {
     position: 'absolute',
     alignSelf: 'center',
@@ -138,7 +195,8 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    elevation: 4,
   },
   loadingText: { color: '#222' },
   errorCard: {
@@ -147,27 +205,49 @@ const styles = StyleSheet.create({
     right: 16,
     padding: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    elevation: 4,
   },
   errorText: { color: '#a00' },
-  clearButton: {
-    position: 'absolute',
-    right: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#111',
-  },
-  clearButtonText: { color: '#fff', fontWeight: '600' },
-  hint: {
+  controls: {
     position: 'absolute',
     left: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    right: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
   },
-  hintText: { fontSize: 12, color: '#444' },
+  controlButton: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  darkButton: { backgroundColor: '#111' },
+  controlIcon: { fontSize: 23, color: '#1769e0' },
+  controlText: { color: '#111', fontWeight: '600' },
+  controlTextDark: { color: '#fff', fontWeight: '600' },
+  pressed: { opacity: 0.7 },
+  routeSummary: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    elevation: 4,
+  },
+  routeSummaryTitle: { fontSize: 14, fontWeight: '700', color: '#111' },
+  routeSummaryText: { marginTop: 2, fontSize: 12, color: '#555' },
 });
 
 export default App;
