@@ -423,6 +423,25 @@ export default function RouteMapperScreen() {
         </View>
       </SafeAreaView>
 
+      <Modal visible={stopsOpen} transparent animationType="slide" onRequestClose={() => setStopsOpen(false)}>
+        <View style={theme.backdrop}><View style={theme.modal}>
+          <View style={theme.modalHeader}><Text style={theme.modalTitle}>Alla stopp ({points.length})</Text><Pressable onPress={() => setStopsOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
+          <ScrollView>
+            {points.map((point, index) => (
+              <View key={point.id} style={theme.stopRow}>
+                <View style={theme.number}><Text style={theme.numberText}>{index + 1}</Text></View>
+                <Pressable style={theme.stopDetails} onPress={() => { mapRef.current?.animateToRegion({...point, latitudeDelta: 0.02, longitudeDelta: 0.02}, 350); setStopsOpen(false); }}>
+                  <Text style={theme.stopName} numberOfLines={2}>{point.label}</Text>
+                  <Text style={theme.coordinates}>{point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
+                </Pressable>
+                <Pressable onPress={() => openEditor(point)} style={theme.smallAction}><Text style={theme.action}>Ändra</Text></Pressable>
+                <Pressable onPress={() => removePoint(point.id)} style={theme.smallAction}><Text style={theme.actionDanger}>Ta bort</Text></Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        </View></View>
+      </Modal>
+
       <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
         <View style={theme.backdrop}><View style={theme.modal}>
           <View style={theme.modalHeader}><Text style={theme.modalTitle}>Sök adress</Text><Pressable onPress={() => setSearchOpen(false)}><Text style={theme.action}>Stäng</Text></Pressable></View>
